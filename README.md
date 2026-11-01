@@ -62,3 +62,7 @@ Examples:
 For multi-word arguments, use quotation marks, for example `,embed "Server News" "Welcome to ONYX"`. Prefix settings are stored per guild in PostgreSQL/SQLite. Text commands require the **Message Content Intent** enabled in the Discord Developer Portal and `intents.message_content = True` in the bot.
 
 Prefix wrappers adapt the existing slash-command callbacks. Some interaction-only responses (such as ephemeral replies) are sent as ordinary channel messages when invoked with a text prefix.
+
+## Interactive help menu
+
+Use `,help` or `/help` to open the ONYX embed help center. Select a category from the first dropdown, then select a command from the second dropdown to view its usage and description. The menu is restricted to the user who opened it and expires after three minutes. The displayed prefix follows the current server prefix setting.

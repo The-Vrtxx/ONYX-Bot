@@ -225,77 +225,189 @@ async def on_ready():
         type=discord.ActivityType.watching, name=",help • your server"
     ))
 
-# Replace discord.py's built-in text help command with ONYX-specific guidance.
+# Replace discord.py's built-in help command with an interactive ONYX help panel.
 bot.remove_command("help")
+
+HELP_CATEGORIES = {
+    "Moderation": [
+        ("ban", ",ban @member [reason]", "Ban a member from this server."),
+        ("kick", ",kick @member [reason]", "Kick a member from this server."),
+        ("timeout", ",timeout @member <minutes> [reason]", "Temporarily timeout a member."),
+        ("untimeout", ",untimeout @member", "Remove a member's timeout."),
+        ("warn", ",warn @member <reason>", "Record a warning."),
+        ("warnings", ",warnings @member", "View a member's warning history."),
+        ("purge", ",purge <amount>", "Delete recent messages."),
+        ("modlogs", ",modlogs @member", "View recent moderation cases."),
+        ("case", ",case <case_id>", "Look up a moderation case."),
+        ("warn_escalation", ",warn_escalation <threshold> <action>", "Configure automatic action after repeated warnings."),
+        ("lock", ",lock", "Lock the current text channel."),
+        ("unlock", ",unlock", "Unlock the current text channel."),
+        ("slowmode", ",slowmode <seconds>", "Set channel slowmode."),
+    ],
+    "AutoMod": [
+        ("automod", ",automod", "Configure automatic moderation."),
+        ("automod_ignore", ",automod_ignore #channel", "Ignore a channel in AutoMod."),
+    ],
+    "Logging": [("logging_set", ",logging_set #channel", "Choose the moderation log channel.")],
+    "Utility": [
+        ("ping", ",ping", "Check ONYX latency."),
+        ("userinfo", ",userinfo [@member]", "Show member information."),
+        ("serverinfo", ",serverinfo", "Show server information."),
+        ("avatar", ",avatar [@member]", "Display a member's avatar."),
+        ("botinfo", ",botinfo", "Show ONYX uptime and statistics."),
+    ],
+    "Welcome": [
+        ("welcome_set", ",welcome_set #channel [message]", "Configure welcome messages."),
+        ("goodbye_set", ",goodbye_set [message]", "Configure goodbye messages."),
+    ],
+    "Roles": [
+        ("selfrole_add", ",selfrole_add @role", "Add a self-assignable role."),
+        ("selfrole_remove", ",selfrole_remove @role", "Remove a self-assignable role."),
+        ("selfrole_list", ",selfrole_list", "List self-assignable roles."),
+        ("role", ",role @role", "Toggle a self-assignable role."),
+        ("rolepanel_create", ",rolepanel_create", "Create a persistent role panel."),
+    ],
+    "Levels": [
+        ("rank", ",rank [@member]", "View a member's level and XP."),
+        ("leaderboard", ",leaderboard", "Show the server XP leaderboard."),
+        ("levels_settings", ",levels_settings", "Configure XP and level-up settings."),
+    ],
+    "Custom Commands & Embeds": [
+        ("embed", ",embed", "Create and send a custom embed."),
+        ("custom_add", ",custom_add <name> <response>", "Create a custom text command."),
+        ("custom_run", ",custom_run <name>", "Run a saved custom command."),
+        ("custom_remove", ",custom_remove <name>", "Delete a custom command."),
+        ("embed_template_save", ",embed_template_save", "Save an embed template."),
+        ("embed_template_send", ",embed_template_send <name>", "Send a saved embed template."),
+        ("embed_template_delete", ",embed_template_delete <name>", "Delete an embed template."),
+    ],
+    "Last.fm": [
+        ("lastfm link", ",lastfm link <username>", "Link your Last.fm account."),
+        ("lastfm nowplaying", ",lastfm nowplaying", "Show your current or latest track."),
+        ("lastfm unlink", ",lastfm unlink", "Unlink your Last.fm account."),
+    ],
+    "Prefix": [
+        ("prefix show", ",prefix show", "Show this server's prefix."),
+        ("prefix set", ",prefix set <new_prefix>", "Change this server's prefix (Manage Server)."),
+        ("prefix reset", ",prefix reset", "Reset this server's prefix to a comma (Manage Server)."),
+    ],
+    "Server Setup": [
+        ("setup", ",setup", "Show the server setup checklist."),
+        ("settings", ",settings", "View this server's ONYX settings."),
+        ("serverdata", ",serverdata", "Explain the server data ONYX stores."),
+    ],
+    "Special Role": [
+        ("shh", ",shh @member", "Quietly assign the configured special role."),
+        ("shh_whitelist_add", ",shh_whitelist_add @member", "Allow a member to use shh (bot owner only)."),
+        ("shh_whitelist_remove", ",shh_whitelist_remove @member", "Remove shh access (bot owner only)."),
+        ("shh_set_role", ",shh_set_role @role", "Configure the special role (bot owner only)."),
+    ],
+}
+
+
+def _help_embed(prefix, category=None, command=None):
+    embed = discord.Embed(
+        title="ONYX • Help Center",
+        description=(
+            f"Browse commands by category using the menus below.\n"
+            f"**Current prefix:** `{prefix}`  •  **Slash commands:** also available\n"
+            f"Choose a category, then choose a command to see what it does."
+        ),
+        color=discord.Color.from_rgb(25, 27, 32)
+    )
+    embed.set_footer(text="ONYX • Modular Discord Management")
+    if category is None:
+        overview = "\n".join(f"**{name}** · {len(items)} commands" for name, items in HELP_CATEGORIES.items())
+        embed.add_field(name="Command Categories", value=overview, inline=False)
+        embed.add_field(name="Quick start", value=f"`{prefix}ping`  ·  `{prefix}rank`  ·  `{prefix}help`", inline=False)
+    else:
+        items = HELP_CATEGORIES[category]
+        listing = "\n".join(f"`{prefix}{usage[len(','):] if usage.startswith(',') else usage}`" for _, usage, _ in items)
+        embed.add_field(name=f"{category} Commands", value=listing[:1024] or "No commands listed.", inline=False)
+        if command:
+            match = next((item for item in items if item[0] == command), None)
+            if match:
+                embed.add_field(name=match[0], value=f"**Usage:** `{prefix}{match[1][1:] if match[1].startswith(',') else match[1]}`\n{match[2]}", inline=False)
+    return embed
+
+
+class HelpCategorySelect(discord.ui.Select):
+    def __init__(self, view):
+        self.help_view = view
+        options = [discord.SelectOption(label=name, description=f"Browse {len(items)} commands", value=name) for name, items in HELP_CATEGORIES.items()]
+        super().__init__(placeholder="Choose a command category…", min_values=1, max_values=1, options=options, row=0)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.help_view.category = self.values[0]
+        self.help_view.command = None
+        self.help_view.refresh_command_select()
+        await interaction.response.edit_message(embed=_help_embed(self.help_view.prefix, self.help_view.category), view=self.help_view)
+
+
+class HelpCommandSelect(discord.ui.Select):
+    def __init__(self, view):
+        self.help_view = view
+        super().__init__(placeholder="Choose a command for details…", min_values=1, max_values=1, options=[discord.SelectOption(label="Select a category first", value="_none")], row=1, disabled=True)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.help_view.command = self.values[0]
+        await interaction.response.edit_message(embed=_help_embed(self.help_view.prefix, self.help_view.category, self.help_view.command), view=self.help_view)
+
+
+class OnyxHelpView(discord.ui.View):
+    def __init__(self, prefix, author_id):
+        super().__init__(timeout=180)
+        self.prefix = prefix
+        self.author_id = author_id
+        self.category = None
+        self.command = None
+        self.category_select = HelpCategorySelect(self)
+        self.command_select = HelpCommandSelect(self)
+        self.add_item(self.category_select)
+        self.add_item(self.command_select)
+
+    def refresh_command_select(self):
+        items = HELP_CATEGORIES.get(self.category, [])
+        self.command_select.options = [
+            discord.SelectOption(label=name[:100], description=description[:100], value=name)
+            for name, _, description in items
+        ] or [discord.SelectOption(label="No commands", value="_none")]
+        self.command_select.disabled = not bool(items)
+        self.command_select.placeholder = f"Choose from {self.category}…" if self.category else "Choose a command for details…"
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This help menu belongs to the person who opened it. Use `,help` to open your own.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+async def _send_help(ctx_or_interaction):
+    guild = getattr(ctx_or_interaction, "guild", None)
+    prefix = ","
+    bot_instance = getattr(ctx_or_interaction, "bot", None) or getattr(ctx_or_interaction, "client", None)
+    if guild and bot_instance and getattr(bot_instance, "db", None):
+        row = await bot_instance.db.fetchone("SELECT prefix FROM guild_settings WHERE guild_id=?", (guild.id,))
+        if row and row["prefix"]:
+            prefix = row["prefix"]
+    author = getattr(ctx_or_interaction, "author", None) or getattr(ctx_or_interaction, "user", None)
+    view = OnyxHelpView(prefix, author.id)
+    embed = _help_embed(prefix)
+    if hasattr(ctx_or_interaction, "response"):
+        await ctx_or_interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    else:
+        await ctx_or_interaction.send(embed=embed, view=view)
 
 
 @bot.command(name="help")
 async def prefix_help(ctx):
-    await ctx.send(
-        "ONYX commands use the comma prefix by default. Examples: `,ban @member`, `,rank`, `,ping`, `,lastfm link username`. Put multi-word text in quotation marks. Use `,prefix` to view or change this server's prefix."
-    )
+    await _send_help(ctx)
 
 
-@bot.tree.command(name="help", description="Browse the bot's command categories.")
+@bot.tree.command(name="help", description="Browse ONYX commands by category using dropdown menus.")
 async def help_command(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="Bot command guide",
-        description="Use Discord's `/` command picker to discover commands.",
-        color=discord.Color.blurple()
-    )
-    categories = {
-        "Moderation": "/ban, /kick, /timeout, /untimeout, /warn, /warnings, /purge, /modlogs, /case, /warn_escalation, /lock, /unlock, /slowmode",
-        "Automod": "/automod settings",
-        "Logging": "/logging set",
-        "Utility": "/ping, /userinfo, /serverinfo, /avatar, /botinfo",
-        "Welcome": "/welcome set",
-        "Roles": "/selfrole_add, /selfrole_remove, /selfrole_list, /role, /rolepanel_create",
-        "Levels": "/rank, /leaderboard, /levels settings",
-        "Custom": "/embed, /custom add, /custom run",
-        "Last.fm": "/lastfm link, /lastfm nowplaying",
-        "Special": "/shh, /shh_whitelist_add, /shh_whitelist_remove, /shh_set_role"
-    }
-    for name, value in categories.items():
-        embed.add_field(name=name, value=value, inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        return
-    if isinstance(error, commands.MissingPermissions):
-        message = "You don't have permission to use that command."
-    elif isinstance(error, commands.BotMissingPermissions):
-        message = "I don't have the Discord permissions needed for that."
-    elif isinstance(error, commands.MissingRequiredArgument):
-        message = f"Missing argument: `{error.param.name}`. Try `,help`."
-    elif isinstance(error, commands.BadArgument):
-        message = str(error) or "One of the arguments wasn't recognized."
-    else:
-        log.error("Prefix command error", exc_info=error)
-        message = "Something went wrong while running that command. Check the Render logs."
-    await ctx.send(message)
-
-
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: Exception):
-    if isinstance(error, commands.MissingPermissions):
-        message = "You don't have permission to use that command."
-    elif isinstance(error, commands.BotMissingPermissions):
-        message = "I don't have the Discord permissions needed for that."
-    elif isinstance(error, commands.CommandOnCooldown):
-        message = f"Slow down! Try again in {error.retry_after:.1f} seconds."
-    elif isinstance(error, commands.CheckFailure):
-        message = "You can't use that command here or with your current permissions."
-    else:
-        log.error("Slash command error", exc_info=error)
-        message = "Something went wrong while running that command."
-    if interaction.response.is_done():
-        await interaction.followup.send(message, ephemeral=True)
-    else:
-        await interaction.response.send_message(message, ephemeral=True)
-
-if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN is missing. Copy .env.example to .env and add your bot token.")
-
-bot.run(TOKEN)
+    await _send_help(interaction)
