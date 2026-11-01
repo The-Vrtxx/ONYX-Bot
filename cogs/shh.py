@@ -1,3 +1,4 @@
+
 import asyncio
 import re
 
@@ -6,53 +7,42 @@ from discord.ext import commands
 
 
 async def is_bot_owner(ctx: commands.Context) -> bool:
-    """Restrict configuration commands to the bot owner in BOT_OWNER_ID."""
     return await ctx.bot.is_owner(ctx.author)
 
 
-def _member_id_from_text(value: str):
-    """Extract an ID only from a real Discord mention or a plain numeric ID."""
-    value = value.strip()
-    mention = re.fullmatch(r"<@!?(\d+)>", value)
-    if mention:
-        return int(mention.group(1))
-    if value.isdecimal():
-        return int(value)
-    return None
-
-
 async def resolve_member(ctx: commands.Context, value: str = None):
-    """Resolve self, an actual message mention, a numeric ID, or a cached name."""
-    if not value or not value.strip():
+    """Resolve a member using Discord mentions, IDs, or exact cached names."""
+
+    # Most reliable: use Discord's actual parsed mention.
+    mentions = ctx.message.mentions
+    if mentions:
+        return mentions[0]
+
+    if not value:
         return ctx.author
 
     value = value.strip()
 
-    # Prefer Discord's parsed mention list. This avoids fragile text parsing
-    # when the user sends a real @mention.
-    if ctx.message.mentions:
-        target_id = _member_id_from_text(value)
-        if target_id is not None:
-            for mentioned in ctx.message.mentions:
-                if mentioned.id == target_id:
-                    return mentioned
+    # Accept plain numeric IDs or Discord mention syntax.
+    match = re.fullmatch(r"<@!?(\d+)>", value)
+    member_id = int(match.group(1)) if match else (
+        int(value) if value.isdecimal() else None
+    )
 
-    target_id = _member_id_from_text(value)
-    if target_id is not None:
-        cached = ctx.guild.get_member(target_id)
-        if cached is not None:
-            return cached
+    if member_id is not None:
+        member = ctx.guild.get_member(member_id)
+
+        if member is not None:
+            return member
+
         try:
-            # Fetch by ID from Discord instead of depending on member cache.
-            return await ctx.guild.fetch_member(target_id)
-        except discord.NotFound:
-            return None
-        except discord.Forbidden:
-            return None
-        except discord.HTTPException:
+            return await ctx.guild.fetch_member(member_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return None
 
+    # Exact username, nickname, or display name.
     wanted = value.strip('"').strip("'").casefold()
+
     matches = [
         member for member in ctx.guild.members
         if wanted in {
@@ -61,98 +51,126 @@ async def resolve_member(ctx: commands.Context, value: str = None):
             str(member).casefold(),
         }
     ]
+
     return matches[0] if len(matches) == 1 else None
 
 
 def resolve_role(ctx: commands.Context, value: str):
-    """Resolve a role from a mention, ID, or exact role name."""
+    """Resolve a role using its mention, ID, or exact name."""
+
     value = value.strip()
-    mention = re.fullmatch(r"<@&(\d+)>", value)
-    role_id = int(mention.group(1)) if mention else (
+
+    match = re.fullmatch(r"<@&(\d+)>", value)
+
+    role_id = int(match.group(1)) if match else (
         int(value) if value.isdecimal() else None
     )
+
     if role_id is not None:
         return ctx.guild.get_role(role_id)
 
     wanted = value.strip('"').strip("'").casefold()
-    matches = [role for role in ctx.guild.roles if role.name.casefold() == wanted]
+
+    matches = [
+        role for role in ctx.guild.roles
+        if role.name.casefold() == wanted
+    ]
+
     return matches[0] if len(matches) == 1 else None
 
 
 class Shh(commands.Cog):
-    """Private, per-server role toggle with temporary command messages."""
 
     DELETE_AFTER_SECONDS = 5
 
     def __init__(self, bot):
         self.bot = bot
 
-    async def _delete_invocation_later(self, message: discord.Message):
-        """Delete the user's prefix command after five seconds, if permitted."""
+    async def _delete_invocation_later(self, message):
         await asyncio.sleep(self.DELETE_AFTER_SECONDS)
+
         try:
             await message.delete()
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            # The user may have deleted it already, or the bot may lack
-            # Manage Messages permission. The bot's own reply still expires.
+        except (
+            discord.NotFound,
+            discord.Forbidden,
+            discord.HTTPException
+        ):
             pass
 
     async def _temporary_reply(
         self,
-        ctx: commands.Context,
-        content: str,
+        ctx,
+        content,
         *,
-        add_shh_reaction: bool = False,
+        add_shh_reaction=False
     ):
-        """Send a reply that expires after five seconds and schedule command cleanup."""
-        asyncio.create_task(self._delete_invocation_later(ctx.message))
-        reply = await ctx.send(content, delete_after=self.DELETE_AFTER_SECONDS)
+        asyncio.create_task(
+            self._delete_invocation_later(ctx.message)
+        )
+
+        reply = await ctx.send(
+            content,
+            delete_after=self.DELETE_AFTER_SECONDS
+        )
+
         if add_shh_reaction:
             try:
                 await reply.add_reaction("🤫")
             except (discord.Forbidden, discord.HTTPException):
                 pass
+
         return reply
+
+    # MAIN SHH COMMAND
 
     @commands.command(
         name="shh",
-        help="Toggle the configured special role for yourself, or for a mentioned member."
+        help="Toggle the configured special role on yourself or another member."
     )
     @commands.guild_only()
-    async def shh(self, ctx: commands.Context, member_text: str = None):
-        # No argument means the command user is the target.
-        # A mention, numeric ID, username, or display name can target someone else.
+    async def shh(self, ctx, member_text: str = None):
+
         member = await resolve_member(ctx, member_text)
+
         if member is None:
             return await self._temporary_reply(
-                ctx, "I couldn't resolve that member. Use a real Discord @mention (select them from the member picker) or paste their numeric user ID. If using an ID, make sure it belongs to someone in this server."
+                ctx,
+                "Member not found. Use a valid member mention or numeric user ID."
             )
 
         allowed = await self.bot.db.fetchone(
             "SELECT 1 FROM shh_whitelist WHERE guild_id=? AND user_id=?",
             (ctx.guild.id, ctx.author.id)
         )
+
         if not allowed:
             return await self._temporary_reply(
-                ctx, "You aren't authorized to use this command."
+                ctx,
+                "You aren't authorized to use this command."
             )
 
         setting = await self.bot.db.fetchone(
             "SELECT role_id FROM shh_settings WHERE guild_id=?",
             (ctx.guild.id,)
         )
+
         if not setting:
             return await self._temporary_reply(
-                ctx, "The special role hasn't been configured for this server yet."
+                ctx,
+                "The special role hasn't been configured for this server."
             )
 
         role = ctx.guild.get_role(setting["role_id"])
+
         if role is None:
             return await self._temporary_reply(
-                ctx, "The configured role no longer exists. Ask the bot owner to set it again."
+                ctx,
+                "The configured role no longer exists."
             )
 
         bot_member = ctx.guild.me
+
         if (
             role.is_default()
             or role.managed
@@ -161,108 +179,154 @@ class Shh(commands.Cog):
         ):
             return await self._temporary_reply(
                 ctx,
-                "I can't manage the configured role. Ask an administrator to move my bot role above it."
+                "I can't manage that role. Move my bot role above it."
             )
 
         try:
             if role in member.roles:
+
                 await member.remove_roles(
                     role,
-                    reason=f"Special role toggle by {ctx.author} ({ctx.author.id})"
+                    reason=f"SHH role toggle by {ctx.author}"
                 )
+
                 action = "removed from"
+
             else:
+
                 await member.add_roles(
                     role,
-                    reason=f"Special role toggle by {ctx.author} ({ctx.author.id})"
+                    reason=f"SHH role toggle by {ctx.author}"
                 )
+
                 action = "assigned to"
+
         except discord.Forbidden:
             return await self._temporary_reply(
                 ctx,
-                "Discord denied the role change. Check my Manage Roles permission and role hierarchy."
+                "Discord denied the role change. Check my Manage Roles permission."
             )
+
         except discord.HTTPException:
             return await self._temporary_reply(
-                ctx, "Discord couldn't apply the role. Please try again."
+                ctx,
+                "Discord couldn't apply the role. Please try again."
             )
 
         return await self._temporary_reply(
             ctx,
             f"Done. **{role.name}** was {action} {member.mention}.",
-            add_shh_reaction=True,
+            add_shh_reaction=True
         )
+
+    # WHITELIST ADD
 
     @commands.command(
         name="shh_whitelist_add",
-        help="(Bot owner) Allow a user to use ,shh in this server."
+        help="Allow a member to use SHH."
     )
     @commands.guild_only()
     @commands.check(is_bot_owner)
-    async def whitelist_add(self, ctx: commands.Context, user_text: str):
+    async def whitelist_add(self, ctx, user_text: str = None):
+
         user = await resolve_member(ctx, user_text)
+
         if user is None:
             return await self._temporary_reply(
-                ctx, "I couldn't resolve that member. Use a real Discord @mention (select them from the member picker) or paste their numeric user ID. If using an ID, make sure it belongs to someone in this server."
+                ctx,
+                "Member not found. Use a valid mention or numeric ID."
             )
+
         await self.bot.db.execute(
-            "INSERT INTO shh_whitelist (guild_id,user_id) VALUES (?,?) ON CONFLICT DO NOTHING",
+            """
+            INSERT INTO shh_whitelist (guild_id, user_id)
+            VALUES (?, ?)
+            ON CONFLICT DO NOTHING
+            """,
             (ctx.guild.id, user.id)
         )
+
         await self._temporary_reply(
-            ctx, f"{user.mention} is now whitelisted for `,shh` in this server."
+            ctx,
+            f"{user.mention} is now whitelisted for SHH."
         )
+
+    # WHITELIST REMOVE
 
     @commands.command(
         name="shh_whitelist_remove",
-        help="(Bot owner) Remove a user's ,shh access in this server."
+        help="Remove a member's SHH access."
     )
     @commands.guild_only()
     @commands.check(is_bot_owner)
-    async def whitelist_remove(self, ctx: commands.Context, user_text: str):
+    async def whitelist_remove(self, ctx, user_text: str = None):
+
         user = await resolve_member(ctx, user_text)
+
         if user is None:
             return await self._temporary_reply(
-                ctx, "I couldn't resolve that member. Use a real Discord @mention (select them from the member picker) or paste their numeric user ID. If using an ID, make sure it belongs to someone in this server."
+                ctx,
+                "Member not found. Use a valid mention or numeric ID."
             )
+
         await self.bot.db.execute(
-            "DELETE FROM shh_whitelist WHERE guild_id=? AND user_id=?",
+            """
+            DELETE FROM shh_whitelist
+            WHERE guild_id=? AND user_id=?
+            """,
             (ctx.guild.id, user.id)
         )
+
         await self._temporary_reply(
-            ctx, f"{user.mention} is no longer whitelisted for `,shh` in this server."
+            ctx,
+            f"{user.mention} is no longer whitelisted for SHH."
         )
+
+    # SET SPECIAL ROLE
 
     @commands.command(
         name="shh_set_role",
-        help="(Bot owner) Choose the role that ,shh grants in this server."
+        help="Configure the special SHH role."
     )
     @commands.guild_only()
     @commands.check(is_bot_owner)
-    async def set_role(self, ctx: commands.Context, *, role_text: str):
+    async def set_role(self, ctx, *, role_text: str):
+
         role = resolve_role(ctx, role_text)
+
         if role is None:
             return await self._temporary_reply(
-                ctx, "I couldn't find that role. Mention it, provide its ID, or use its exact name."
+                ctx,
+                "Role not found. Mention the role, provide its ID, or use its exact name."
             )
+
         bot_member = ctx.guild.me
+
         if role.is_default() or role.managed:
             return await self._temporary_reply(
-                ctx, "Choose a normal, non-managed role (not @everyone)."
+                ctx,
+                "Choose a normal server role."
             )
+
         if bot_member is None or role >= bot_member.top_role:
             return await self._temporary_reply(
                 ctx,
-                "Move the bot's highest role above the role you want `,shh` to grant, then try again."
+                "Move the bot's highest role above the configured role."
             )
 
         await self.bot.db.execute(
-            """INSERT INTO shh_settings (guild_id,role_id) VALUES (?,?)
-            ON CONFLICT(guild_id) DO UPDATE SET role_id=excluded.role_id""",
+            """
+            INSERT INTO shh_settings (guild_id, role_id)
+            VALUES (?, ?)
+            ON CONFLICT(guild_id)
+            DO UPDATE SET role_id=excluded.role_id
+            """,
             (ctx.guild.id, role.id)
         )
+
         await self._temporary_reply(
-            ctx, f"`,shh` will now grant **{role.name}** in this server."
+            ctx,
+            f"SHH will now use **{role.name}**."
         )
 
 
