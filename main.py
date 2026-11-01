@@ -61,6 +61,96 @@ async def on_ready():
     log.info("Logged in as %s (%s)", bot.user, bot.user.id)
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=",help • your server"))
 
+
+@bot.event
+async def on_message(message):
+    # Prefix commands must always be dispatched after message listeners.
+    if message.author.bot:
+        return
+    await bot.process_commands(message)
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    # Make command failures visible in Discord and detailed in Render logs.
+    original = getattr(error, "original", error)
+    if isinstance(error, commands.CommandNotFound):
+        return
+    if isinstance(error, commands.CheckFailure):
+        await ctx.send("You need to be the server owner or have Manage Server permission to use this command.")
+        return
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"Missing information: `{error.param.name}`. Check `,help` for the command format.")
+        return
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(f"I couldn't understand one of the arguments. Check `,help` for the command format.")
+        return
+    log.error(
+        "Command error in %s from %s (guild=%s): %s",
+        ctx.command.qualified_name if ctx.command else "unknown",
+        ctx.author.id,
+        ctx.guild.id if ctx.guild else "DM",
+        repr(original),
+        exc_info=(type(original), original, original.__traceback__),
+    )
+    try:
+        await ctx.send("That command ran into an error. The details have been recorded in the Render logs.")
+    except discord.HTTPException:
+        pass
+
+
+
+@bot.group(name="reload", invoke_without_command=True)
+@commands.is_owner()
+async def reload_cogs(ctx, *, cog: str = None):
+    """Reload one cog, or all loaded cogs. Owner only."""
+    cog_files = sorted(
+        path.stem for path in Path("cogs").glob("*.py")
+        if not path.name.startswith("_")
+    )
+
+    if cog:
+        cog = cog.strip().removeprefix("cogs.").removesuffix(".py")
+        if cog not in cog_files:
+            return await ctx.send(
+                f"Couldn't find cog `{cog}`. Available cogs: "
+                + ", ".join(f"`{name}`" for name in cog_files)
+            )
+        extension = f"cogs.{cog}"
+        try:
+            if extension in bot.extensions:
+                await bot.reload_extension(extension)
+            else:
+                await bot.load_extension(extension)
+            return await ctx.send(f"Reloaded `{cog}` successfully.")
+        except Exception as exc:
+            log.exception("Failed to reload extension %s", extension)
+            return await ctx.send(
+                f"Couldn't reload `{cog}`: `{type(exc).__name__}: {exc}`"
+            )
+
+    succeeded = []
+    failed = []
+    for name in cog_files:
+        extension = f"cogs.{name}"
+        try:
+            if extension in bot.extensions:
+                await bot.reload_extension(extension)
+            else:
+                await bot.load_extension(extension)
+            succeeded.append(name)
+        except Exception as exc:
+            log.exception("Failed to reload extension %s", extension)
+            failed.append(f"{name}: {type(exc).__name__}: {exc}")
+
+    summary = f"Reload complete. **{len(succeeded)}** loaded/reloaded."
+    if succeeded:
+        summary += "\\n**Successful:** " + ", ".join(f"`{name}`" for name in succeeded)
+    if failed:
+        summary += "\\n**Failed:** " + "; ".join(failed)
+    await ctx.send(summary)
+
+
 HELP_CATEGORIES = {
     "Moderation": [
         ("ban", ",ban @member [reason]", "Ban a member from this server."),
@@ -106,11 +196,11 @@ HELP_CATEGORIES = {
         ("levels_settings", ",levels_settings <enabled> [#channel]", "Configure XP and level-up settings."),
     ],
     "Custom Commands & Embeds": [
-        ("embed", ",embed", "Create and send a custom embed."),
+        ("embed", ",embed <title> <description>", "Create and send a custom embed."),
         ("custom_add", ",custom_add <name> <response>", "Create a custom text command."),
         ("custom_run", ",custom_run <name>", "Run a saved custom command."),
         ("custom_remove", ",custom_remove <name>", "Delete a custom command."),
-        ("embed_template_save", ",embed_template_save", "Save an embed template."),
+        ("embed_template_save", ",embed_template_save <name> <title> <description>", "Save an embed template."),
         ("embed_template_send", ",embed_template_send <name>", "Send a saved embed template."),
         ("embed_template_delete", ",embed_template_delete <name>", "Delete an embed template."),
     ],
@@ -128,6 +218,7 @@ HELP_CATEGORIES = {
         ("setup", ",setup", "Show the server setup checklist."),
         ("settings", ",settings", "View this server's ONYX settings."),
         ("serverdata", ",serverdata", "Explain the server data ONYX stores."),
+        ("reload", ",reload [cog]", "Reload one cog or all cogs (bot owner only)."),
     ],
     "Special Role": [
         ("shh", ",shh @member", "Toggle the configured special role on or off."),
