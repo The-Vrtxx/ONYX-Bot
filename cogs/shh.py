@@ -9,6 +9,49 @@ async def is_bot_owner(ctx: commands.Context) -> bool:
     return await ctx.bot.is_owner(ctx.author)
 
 
+def _extract_id(value: str):
+    """Accept raw IDs and Discord mention forms."""
+    digits = "".join(char for char in value if char.isdigit())
+    return int(digits) if digits else None
+
+
+async def resolve_member(ctx: commands.Context, value: str):
+    """Resolve a member from a mention, ID, username, display name, or nickname."""
+    if not value:
+        return ctx.author
+    member_id = _extract_id(value)
+    if member_id is not None:
+        member = ctx.guild.get_member(member_id)
+        if member is not None:
+            return member
+        try:
+            return await ctx.guild.fetch_member(member_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return None
+
+    wanted = value.strip().strip('"').strip("'").casefold()
+    for member in ctx.guild.members:
+        if wanted in {
+            member.name.casefold(),
+            member.display_name.casefold(),
+            str(member).casefold(),
+        }:
+            return member
+    return None
+
+
+def resolve_role(ctx: commands.Context, value: str):
+    """Resolve a role from a mention, ID, or its full name (including spaces)."""
+    role_id = _extract_id(value)
+    if role_id is not None:
+        return ctx.guild.get_role(role_id)
+    wanted = value.strip().strip('"').strip("'").casefold()
+    return discord.utils.find(
+        lambda role: role.name.casefold() == wanted,
+        ctx.guild.roles,
+    )
+
+
 class Shh(commands.Cog):
     """Private, per-server role toggle with temporary command messages."""
 
@@ -49,10 +92,14 @@ class Shh(commands.Cog):
         help="Toggle the configured special role for yourself, or for a mentioned member."
     )
     @commands.guild_only()
-    async def shh(self, ctx: commands.Context, member: discord.Member = None):
-        # No member argument means the command user is the target.
-        # Examples: ,shh  |  ,shh @member
-        member = member or ctx.author
+    async def shh(self, ctx: commands.Context, member_text: str = None):
+        # No argument means the command user is the target.
+        # A mention, numeric ID, username, or display name can target someone else.
+        member = await resolve_member(ctx, member_text)
+        if member is None:
+            return await self._temporary_reply(
+                ctx, "I couldn't find that member. Mention them or provide their user ID."
+            )
 
         allowed = await self.bot.db.fetchone(
             "SELECT 1 FROM shh_whitelist WHERE guild_id=? AND user_id=?",
@@ -125,7 +172,12 @@ class Shh(commands.Cog):
     )
     @commands.guild_only()
     @commands.check(is_bot_owner)
-    async def whitelist_add(self, ctx: commands.Context, user: discord.Member):
+    async def whitelist_add(self, ctx: commands.Context, user_text: str):
+        user = await resolve_member(ctx, user_text)
+        if user is None:
+            return await self._temporary_reply(
+                ctx, "I couldn't find that member. Mention them or provide their user ID."
+            )
         await self.bot.db.execute(
             "INSERT INTO shh_whitelist (guild_id,user_id) VALUES (?,?) ON CONFLICT DO NOTHING",
             (ctx.guild.id, user.id)
@@ -140,7 +192,12 @@ class Shh(commands.Cog):
     )
     @commands.guild_only()
     @commands.check(is_bot_owner)
-    async def whitelist_remove(self, ctx: commands.Context, user: discord.Member):
+    async def whitelist_remove(self, ctx: commands.Context, user_text: str):
+        user = await resolve_member(ctx, user_text)
+        if user is None:
+            return await self._temporary_reply(
+                ctx, "I couldn't find that member. Mention them or provide their user ID."
+            )
         await self.bot.db.execute(
             "DELETE FROM shh_whitelist WHERE guild_id=? AND user_id=?",
             (ctx.guild.id, user.id)
@@ -155,7 +212,12 @@ class Shh(commands.Cog):
     )
     @commands.guild_only()
     @commands.check(is_bot_owner)
-    async def set_role(self, ctx: commands.Context, role: discord.Role):
+    async def set_role(self, ctx: commands.Context, *, role_text: str):
+        role = resolve_role(ctx, role_text)
+        if role is None:
+            return await self._temporary_reply(
+                ctx, "I couldn't find that role. Mention it, provide its ID, or use its exact name."
+            )
         bot_member = ctx.guild.me
         if role.is_default() or role.managed:
             return await self._temporary_reply(
