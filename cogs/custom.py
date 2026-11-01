@@ -25,7 +25,7 @@ class Custom(commands.Cog):
         if len(response) > 1800:
             return await interaction.response.send_message("Response must be 1800 characters or fewer.", ephemeral=True)
         await self.bot.db.execute("INSERT INTO custom_commands VALUES (?,?,?) ON CONFLICT(guild_id,name) DO UPDATE SET response=excluded.response", (interaction.guild.id, name, response))
-        await interaction.response.send_message(f"Custom command `/{name}` saved. Use `/custom_run` with that name.", ephemeral=True)
+        await interaction.response.send_message(f"Custom command `{name}` saved. Run it with your prefix followed by `custom_run {name}`.", ephemeral=True)
 
     @app_commands.command(name="custom_run", description="Run a server custom command.")
     async def run_custom(self, interaction: discord.Interaction, name: str):

@@ -83,7 +83,7 @@ class Roles(commands.Cog):
         allowed = await self.bot.db.fetchone("SELECT 1 FROM self_roles WHERE guild_id=? AND role_id=?",
                                               (interaction.guild.id, role.id))
         if not allowed:
-            return await interaction.response.send_message("Add this role with `/selfrole_add` first.", ephemeral=True)
+            return await interaction.response.send_message("Add this role with your prefix followed by `selfrole_add` first.", ephemeral=True)
         view = RoleToggleButton(self.bot, role.id)
         embed = discord.Embed(title=f"Self role: {role.name}", description=description,
                               color=discord.Color.blurple())

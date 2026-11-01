@@ -48,7 +48,7 @@ class Prefix(commands.Cog):
         )
         await interaction.response.send_message(
             f"ONYX's prefix for this server is now `{new_prefix}`. "
-            "Most ONYX features still use slash commands; the prefix is ready for text commands.",
+            "All ONYX commands now use this prefix.",
             ephemeral=True
         )
 

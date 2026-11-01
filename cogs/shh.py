@@ -9,20 +9,21 @@ async def is_bot_owner(interaction: discord.Interaction) -> bool:
 
 
 class Shh(commands.Cog):
-    """Private, per-server role grant command with bot-owner configuration."""
+    """Private, per-server role toggle with bot-owner configuration."""
 
     def __init__(self, bot):
         self.bot = bot
 
     @app_commands.command(
         name="shh",
-        description="Quietly give a member the server's configured special role."
+        description="Toggle the server's configured special role on a member."
     )
     @app_commands.guild_only()
     async def shh(self, interaction: discord.Interaction, member: discord.Member):
+        guild = interaction.guild
         allowed = await self.bot.db.fetchone(
             "SELECT 1 FROM shh_whitelist WHERE guild_id=? AND user_id=?",
-            (interaction.guild.id, interaction.user.id)
+            (guild.id, interaction.user.id)
         )
         if not allowed:
             return await interaction.response.send_message(
@@ -31,7 +32,7 @@ class Shh(commands.Cog):
 
         setting = await self.bot.db.fetchone(
             "SELECT role_id FROM shh_settings WHERE guild_id=?",
-            (interaction.guild.id,)
+            (guild.id,)
         )
         if not setting:
             return await interaction.response.send_message(
@@ -39,13 +40,14 @@ class Shh(commands.Cog):
                 ephemeral=True
             )
 
-        role = interaction.guild.get_role(setting["role_id"])
+        role = guild.get_role(setting["role_id"])
+        me = guild.me
         if role is None:
             return await interaction.response.send_message(
                 "The configured role no longer exists. Ask the bot owner to set it again.",
                 ephemeral=True
             )
-        if role.is_default() or role.managed or role >= interaction.guild.me.top_role:
+        if role.is_default() or role.managed or me is None or role >= me.top_role:
             return await interaction.response.send_message(
                 "I can't manage the configured role. Ask an administrator to move my bot role above it.",
                 ephemeral=True
@@ -54,13 +56,20 @@ class Shh(commands.Cog):
             return await interaction.response.send_message(
                 "I can't assign the role to myself.", ephemeral=True
             )
-        if role in member.roles:
-            return await interaction.response.send_message(
-                f"{member.mention} already has **{role.name}**.", ephemeral=True
-            )
 
         try:
-            await member.add_roles(role, reason=f"Special /shh role grant by {interaction.user} ({interaction.user.id})")
+            if role in member.roles:
+                await member.remove_roles(
+                    role,
+                    reason=f"Special shh role toggle by {interaction.user} ({interaction.user.id})"
+                )
+                action = "removed from"
+            else:
+                await member.add_roles(
+                    role,
+                    reason=f"Special shh role toggle by {interaction.user} ({interaction.user.id})"
+                )
+                action = "assigned to"
         except discord.Forbidden:
             return await interaction.response.send_message(
                 "Discord denied the role change. Check my Manage Roles permission and role hierarchy.",
@@ -68,18 +77,24 @@ class Shh(commands.Cog):
             )
         except discord.HTTPException:
             return await interaction.response.send_message(
-                "Discord couldn't apply the role. Please try again.", ephemeral=True
+                "Discord couldn't apply the role change. Please try again.", ephemeral=True
             )
 
-        # Private acknowledgement; the role grant itself is recorded in the audit log.
-        await interaction.response.send_message(
-            f"Done. **{role.name}** was assigned to {member.mention}.",
-            ephemeral=True
-        )
+        message = f"Done. **{role.name}** was {action} {member.mention}."
+        # Prefix mode sends a normal message so ONYX can react to its confirmation.
+        ctx = getattr(interaction, "_ctx", None)
+        if ctx is not None:
+            confirmation = await ctx.send(message)
+            try:
+                await confirmation.add_reaction("🤫")
+            except discord.HTTPException:
+                pass
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
 
     @app_commands.command(
         name="shh_whitelist_add",
-        description="(Bot owner) Allow a user to use /shh in this server."
+        description="(Bot owner) Allow a user to use shh in this server."
     )
     @app_commands.guild_only()
     @app_commands.check(is_bot_owner)
@@ -89,13 +104,13 @@ class Shh(commands.Cog):
             (interaction.guild.id, user.id)
         )
         await interaction.response.send_message(
-            f"{user.mention} is now whitelisted for `/shh` in this server.",
+            f"{user.mention} is now whitelisted for `shh` in this server.",
             ephemeral=True
         )
 
     @app_commands.command(
         name="shh_whitelist_remove",
-        description="(Bot owner) Remove a user's /shh access in this server."
+        description="(Bot owner) Remove a user's shh access in this server."
     )
     @app_commands.guild_only()
     @app_commands.check(is_bot_owner)
@@ -105,13 +120,13 @@ class Shh(commands.Cog):
             (interaction.guild.id, user.id)
         )
         await interaction.response.send_message(
-            f"{user.mention} is no longer whitelisted for `/shh` in this server.",
+            f"{user.mention} is no longer whitelisted for `shh` in this server.",
             ephemeral=True
         )
 
     @app_commands.command(
         name="shh_set_role",
-        description="(Bot owner) Choose the role that /shh grants in this server."
+        description="(Bot owner) Choose the role that shh grants in this server."
     )
     @app_commands.guild_only()
     @app_commands.check(is_bot_owner)
@@ -122,7 +137,7 @@ class Shh(commands.Cog):
             )
         if interaction.guild.me is None or role >= interaction.guild.me.top_role:
             return await interaction.response.send_message(
-                "Move the bot's highest role above the role you want `/shh` to grant, then try again.",
+                "Move the bot's highest role above the role you want shh to grant, then try again.",
                 ephemeral=True
             )
         await self.bot.db.execute(
@@ -131,7 +146,7 @@ class Shh(commands.Cog):
             (interaction.guild.id, role.id)
         )
         await interaction.response.send_message(
-            f"`/shh` will now grant **{role.name}** in this server.",
+            f"`shh` will now toggle **{role.name}** in this server.",
             ephemeral=True
         )
 
