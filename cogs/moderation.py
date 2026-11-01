@@ -17,7 +17,7 @@ class Moderation(commands.Cog):
             channel = guild.get_channel(row["log_channel_id"])
             if channel:
                 try:
-                    await channel.send(embed=discord.Embed(title=title, help=description, color=discord.Color.orange()))
+                    await channel.send(embed=discord.Embed(title=title, description=description, color=discord.Color.orange()))
                 except discord.HTTPException:
                     pass
 

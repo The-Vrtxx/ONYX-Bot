@@ -6,7 +6,7 @@ class ServerSetup(commands.Cog):
         self.bot = bot
 
     @commands.command(name="setup", help="Show the ONYX setup checklist for this server.")
-    @commands.has_permissions(manage_guild=True)
+    @commands.check(lambda ctx: ctx.guild is not None and (ctx.guild.owner_id == ctx.author.id or ctx.author.guild_permissions.manage_guild))
     async def setup(self, ctx: commands.Context):
         if ctx.guild is None:
             return await ctx.send("Use this command inside a server.",)
@@ -14,7 +14,7 @@ class ServerSetup(commands.Cog):
         row = await self.bot.db.fetchone("SELECT log_channel_id,welcome_channel_id,xp_enabled,automod_enabled FROM guild_settings WHERE guild_id=?", (g.id,))
         log_channel = getattr(g.get_channel(row["log_channel_id"]), "mention", "Not configured") if row and row["log_channel_id"] else "Not configured"
         welcome_channel = getattr(g.get_channel(row["welcome_channel_id"]), "mention", "Not configured") if row and row["welcome_channel_id"] else "Not configured"
-        embed = discord.Embed(title=f"ONYX setup • {g.name}", help="Each Discord server has independent settings and records.", color=discord.Color.dark_grey())
+        embed = discord.Embed(title=f"ONYX setup • {g.name}", description="Each Discord server has independent settings and records.", color=discord.Color.dark_grey())
         embed.add_field(name="Logging channel", value=log_channel, inline=True)
         embed.add_field(name="Welcome channel", value=welcome_channel, inline=True)
         embed.add_field(name="Leveling", value="Enabled" if not row or row["xp_enabled"] else "Disabled", inline=True)
@@ -23,7 +23,7 @@ class ServerSetup(commands.Cog):
         await ctx.send(embed=embed,)
 
     @commands.command(name="settings", help="View this server's ONYX configuration.")
-    @commands.has_permissions(manage_guild=True)
+    @commands.check(lambda ctx: ctx.guild is not None and (ctx.guild.owner_id == ctx.author.id or ctx.author.guild_permissions.manage_guild))
     async def settings(self, ctx: commands.Context):
         if ctx.guild is None:
             return await ctx.send("Use this command inside a server.",)
@@ -36,7 +36,7 @@ class ServerSetup(commands.Cog):
         await ctx.send(embed=embed,)
 
     @commands.command(name="serverdata", help="Explain what ONYX stores for this server.")
-    @commands.has_permissions(manage_guild=True)
+    @commands.check(lambda ctx: ctx.guild is not None and (ctx.guild.owner_id == ctx.author.id or ctx.author.guild_permissions.manage_guild))
     async def serverdata(self, ctx: commands.Context):
         if ctx.guild is None:
             return await ctx.send("Use this command inside a server.",)
@@ -45,7 +45,7 @@ class ServerSetup(commands.Cog):
         for table in ("mod_cases", "warnings", "levels", "custom_commands", "embed_templates"):
             row = await self.bot.db.fetchone(f"SELECT COUNT(*) AS n FROM {table} WHERE guild_id=?", (gid,))
             counts[table] = row["n"]
-        embed = discord.Embed(title=f"ONYX data • {ctx.guild.name}", help="Counts are limited to this server's records.", color=discord.Color.dark_grey())
+        embed = discord.Embed(title=f"ONYX data • {ctx.guild.name}", description="Counts are limited to this server's records.", color=discord.Color.dark_grey())
         for table, count in counts.items():
             embed.add_field(name=table.replace("_", " ").title(), value=str(count), inline=True)
         embed.set_footer(text="For deletion or privacy requests, contact the bot operator.")

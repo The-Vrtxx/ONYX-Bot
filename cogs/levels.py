@@ -49,7 +49,7 @@ class Levels(commands.Cog):
         rows = await self.bot.db.fetchall("SELECT user_id,level,xp FROM levels WHERE guild_id=? ORDER BY level DESC,xp DESC LIMIT 10", (ctx.guild.id,))
         if not rows: return await ctx.send("No level data yet.")
         lines = [f"**{i}.** <@{r['user_id']}> — level {r['level']} ({r['xp']} XP)" for i, r in enumerate(rows, 1)]
-        await ctx.send(embed=discord.Embed(title="🏆 Level leaderboard", help="\n".join(lines), color=discord.Color.gold()))
+        await ctx.send(embed=discord.Embed(title="🏆 Level leaderboard", description="\n".join(lines), color=discord.Color.gold()))
 
     @commands.command(name="levels_settings", help="Enable/disable XP and choose level-up channel.")
     @commands.has_permissions(manage_guild=True)

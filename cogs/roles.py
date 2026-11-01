@@ -84,7 +84,7 @@ class Roles(commands.Cog):
         if not allowed:
             return await ctx.send("Add this role with `,selfrole_add` first.",)
         view = RoleToggleButton(self.bot, role.id)
-        embed = discord.Embed(title=f"Self role: {role.name}", help=description,
+        embed = discord.Embed(title=f"Self role: {role.name}", description=description,
                               color=discord.Color.blurple())
         message = await channel.send(embed=embed, view=view)
         await self.bot.db.execute("INSERT INTO role_panels VALUES (?,?,?,?) ON CONFLICT DO NOTHING",

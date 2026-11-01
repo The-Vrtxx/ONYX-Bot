@@ -10,7 +10,7 @@ class ServerLogging(commands.Cog):
         channel = guild.get_channel(row["log_channel_id"])
         if channel:
             try:
-                await channel.send(embed=discord.Embed(title=title, help=description[:4000], color=color, timestamp=discord.utils.utcnow()))
+                await channel.send(embed=discord.Embed(title=title, description=description[:4000], color=color, timestamp=discord.utils.utcnow()))
             except discord.HTTPException: pass
 
     @commands.command(name="logging_set", help="Set the server's log channel.")

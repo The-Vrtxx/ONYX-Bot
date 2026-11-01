@@ -44,7 +44,7 @@ class LastFM(commands.Cog):
             album = track.get("album", {}).get("#text", "")
             title = track.get("name", "Unknown track")
             playing = track.get("@attr", {}).get("nowplaying") == "true"
-            embed = discord.Embed(title="🎧 Now playing" if playing else "🎵 Recently played", help=f"**{title}**\nby {artist}", color=discord.Color.from_rgb(186, 85, 211))
+            embed = discord.Embed(title="🎧 Now playing" if playing else "🎵 Recently played", description=f"**{title}**\nby {artist}", color=discord.Color.from_rgb(186, 85, 211))
             if album: embed.add_field(name="Album", value=album)
             embed.set_footer(text=f"Last.fm • {row['username']}")
             images = track.get("image", [])
