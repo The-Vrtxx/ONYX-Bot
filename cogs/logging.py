@@ -1,5 +1,4 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
 
 class ServerLogging(commands.Cog):
@@ -11,14 +10,14 @@ class ServerLogging(commands.Cog):
         channel = guild.get_channel(row["log_channel_id"])
         if channel:
             try:
-                await channel.send(embed=discord.Embed(title=title, description=description[:4000], color=color, timestamp=discord.utils.utcnow()))
+                await channel.send(embed=discord.Embed(title=title, help=description[:4000], color=color, timestamp=discord.utils.utcnow()))
             except discord.HTTPException: pass
 
-    @app_commands.command(name="logging_set", description="Set the server's log channel.")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def set_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        await self.bot.db.execute("INSERT INTO guild_settings (guild_id,log_channel_id) VALUES (?,?) ON CONFLICT(guild_id) DO UPDATE SET log_channel_id=excluded.log_channel_id", (interaction.guild.id, channel.id))
-        await interaction.response.send_message(f"Logs will be sent to {channel.mention}.", ephemeral=True)
+    @commands.command(name="logging_set", help="Set the server's log channel.")
+    @commands.has_permissions(manage_guild=True)
+    async def set_channel(self, ctx: commands.Context, channel: discord.TextChannel):
+        await self.bot.db.execute("INSERT INTO guild_settings (guild_id,log_channel_id) VALUES (?,?) ON CONFLICT(guild_id) DO UPDATE SET log_channel_id=excluded.log_channel_id", (ctx.guild.id, channel.id))
+        await ctx.send(f"Logs will be sent to {channel.mention}.",)
 
     @commands.Cog.listener()
     async def on_message_delete(self, message):

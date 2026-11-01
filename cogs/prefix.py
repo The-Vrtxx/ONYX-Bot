@@ -1,73 +1,33 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
 
-
 class Prefix(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
+    def __init__(self, bot): self.bot = bot
 
-    prefix_group = app_commands.Group(
-        name="prefix",
-        description="View or change this server's ONYX text-command prefix."
-    )
+    @commands.group(name="prefix", invoke_without_command=True)
+    async def prefix_group(self, ctx):
+        await ctx.send(f"Use `{ctx.prefix}prefix show`, `{ctx.prefix}prefix set <new_prefix>`, or `{ctx.prefix}prefix reset`.")
 
-    @prefix_group.command(name="show", description="Show this server's current prefix.")
-    async def show_prefix(self, interaction: discord.Interaction):
-        if interaction.guild is None:
-            return await interaction.response.send_message(
-                "Prefixes are configured separately for each server.", ephemeral=True
-            )
-        row = await self.bot.db.fetchone(
-            "SELECT prefix FROM guild_settings WHERE guild_id=?",
-            (interaction.guild.id,)
-        )
+    @prefix_group.command(name="show")
+    async def show_prefix(self, ctx):
+        if ctx.guild is None: return await ctx.send("Prefixes are configured separately for each server.")
+        row = await self.bot.db.fetchone("SELECT prefix FROM guild_settings WHERE guild_id=?", (ctx.guild.id,))
         prefix = row["prefix"] if row and row["prefix"] else ","
-        await interaction.response.send_message(
-            f"This server's ONYX prefix is `{prefix}`.", ephemeral=True
-        )
+        await ctx.send(f"This server's ONYX prefix is `{prefix}`.")
 
-    @prefix_group.command(name="set", description="Set this server's ONYX text-command prefix.")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    @app_commands.describe(new_prefix="The prefix to use (1–5 characters, no spaces).")
-    async def set_prefix(self, interaction: discord.Interaction, new_prefix: str):
-        if interaction.guild is None:
-            return await interaction.response.send_message(
-                "Use this command inside a server.", ephemeral=True
-            )
+    @prefix_group.command(name="set")
+    @commands.has_permissions(manage_guild=True)
+    async def set_prefix(self, ctx, *, new_prefix: str):
         new_prefix = new_prefix.strip()
         if not 1 <= len(new_prefix) <= 5 or any(char.isspace() for char in new_prefix):
-            return await interaction.response.send_message(
-                "Choose a prefix between 1 and 5 characters, with no spaces.",
-                ephemeral=True
-            )
-        await self.bot.db.execute(
-            """INSERT INTO guild_settings (guild_id, prefix) VALUES (?, ?)
-               ON CONFLICT(guild_id) DO UPDATE SET prefix=excluded.prefix""",
-            (interaction.guild.id, new_prefix)
-        )
-        await interaction.response.send_message(
-            f"ONYX's prefix for this server is now `{new_prefix}`. "
-            "All ONYX commands now use this prefix.",
-            ephemeral=True
-        )
+            return await ctx.send("Choose a prefix between 1 and 5 characters, with no spaces.")
+        await self.bot.db.execute("INSERT INTO guild_settings (guild_id,prefix) VALUES (?,?) ON CONFLICT(guild_id) DO UPDATE SET prefix=excluded.prefix", (ctx.guild.id, new_prefix))
+        await ctx.send(f"ONYX's prefix for this server is now `{new_prefix}`.")
 
-    @prefix_group.command(name="reset", description="Reset this server's prefix to the default comma.")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def reset_prefix(self, interaction: discord.Interaction):
-        if interaction.guild is None:
-            return await interaction.response.send_message(
-                "Use this command inside a server.", ephemeral=True
-            )
-        await self.bot.db.execute(
-            """INSERT INTO guild_settings (guild_id, prefix) VALUES (?, ',')
-               ON CONFLICT(guild_id) DO UPDATE SET prefix=excluded.prefix""",
-            (interaction.guild.id,)
-        )
-        await interaction.response.send_message(
-            "ONYX's prefix has been reset to `,`.", ephemeral=True
-        )
+    @prefix_group.command(name="reset")
+    @commands.has_permissions(manage_guild=True)
+    async def reset_prefix(self, ctx):
+        await self.bot.db.execute("INSERT INTO guild_settings (guild_id,prefix) VALUES (?,',') ON CONFLICT(guild_id) DO UPDATE SET prefix=excluded.prefix", (ctx.guild.id,))
+        await ctx.send("ONYX's prefix has been reset to `,`.")
 
-
-async def setup(bot):
-    await bot.add_cog(Prefix(bot))
+async def setup(bot): await bot.add_cog(Prefix(bot))

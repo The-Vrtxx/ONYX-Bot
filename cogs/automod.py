@@ -2,7 +2,6 @@ import re
 from collections import defaultdict, deque
 from time import monotonic
 import discord
-from discord import app_commands
 from discord.ext import commands
 
 class AutoMod(commands.Cog):
@@ -10,24 +9,25 @@ class AutoMod(commands.Cog):
         self.bot = bot
         self.recent = defaultdict(deque)
 
-    @app_commands.command(name="automod", description="Configure automatic moderation.")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def automod(self, interaction: discord.Interaction, enabled: bool, block_invites: bool = True, block_links: bool = False, spam_limit: app_commands.Range[int, 3, 10] = 5):
+    @commands.command(name="automod", help="Configure automatic moderation.")
+    @commands.has_permissions(manage_guild=True)
+    async def automod(self, ctx: commands.Context, enabled: bool, block_invites: bool = True, block_links: bool = False, spam_limit: int = 5):
+        if not 3 <= spam_limit <= 10:
+            return await ctx.send("Spam threshold must be between 3 and 10 messages.")
         await self.bot.db.execute(
             """INSERT INTO guild_settings (guild_id,automod_enabled,block_invites,block_links,spam_limit)
             VALUES (?,?,?,?,?) ON CONFLICT(guild_id) DO UPDATE SET
             automod_enabled=excluded.automod_enabled, block_invites=excluded.block_invites,
             block_links=excluded.block_links, spam_limit=excluded.spam_limit""",
-            (interaction.guild.id, int(enabled), int(block_invites), int(block_links), spam_limit))
-        await interaction.response.send_message(
-            f"Automod **{'enabled' if enabled else 'disabled'}**. Invite filter: {block_invites}; link filter: {block_links}; spam threshold: {spam_limit}.",
-            ephemeral=True)
+            (ctx.guild.id, int(enabled), int(block_invites), int(block_links), spam_limit))
+        await ctx.send(
+            f"Automod **{'enabled' if enabled else 'disabled'}**. Invite filter: {block_invites}; link filter: {block_links}; spam threshold: {spam_limit}.",)
 
-    @app_commands.command(name="automod_ignore", description="Ignore a channel in automod.")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def ignore(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        await self.bot.db.execute("INSERT INTO automod_ignored VALUES (?,?) ON CONFLICT DO NOTHING", (interaction.guild.id, channel.id))
-        await interaction.response.send_message(f"Automod will ignore {channel.mention}.", ephemeral=True)
+    @commands.command(name="automod_ignore", help="Ignore a channel in automod.")
+    @commands.has_permissions(manage_guild=True)
+    async def ignore(self, ctx: commands.Context, channel: discord.TextChannel):
+        await self.bot.db.execute("INSERT INTO automod_ignored VALUES (?,?) ON CONFLICT DO NOTHING", (ctx.guild.id, channel.id))
+        await ctx.send(f"Automod will ignore {channel.mention}.",)
 
     @commands.Cog.listener()
     async def on_message(self, message):
