@@ -63,10 +63,60 @@ async def on_ready():
 
 
 @bot.event
+
+
+async def normalize_spaced_command(bot, message):
+    """Allow commands such as ',shh whitelist add' for 'shh_whitelist_add'.
+
+    Only the command portion at the beginning of the message is normalized;
+    arguments (including multi-word reasons/messages) are left untouched.
+    """
+    if message.guild is None or message.author.bot:
+        return
+
+    prefixes = await get_prefix(bot, message)
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+
+    content = message.content
+    matched_prefix = next(
+        (prefix for prefix in sorted(prefixes, key=len, reverse=True)
+         if content.startswith(prefix)),
+        None,
+    )
+    if not matched_prefix:
+        return
+
+    command_text = content[len(matched_prefix):]
+    if not command_text:
+        return
+
+    # Build aliases from every registered command's full qualified name.
+    # Example: shh_whitelist_add -> "shh whitelist add".
+    candidates = []
+    for command in bot.walk_commands():
+        qualified = command.qualified_name
+        spaced = qualified.replace("_", " ")
+        if spaced != qualified:
+            candidates.append((spaced, qualified))
+
+    # Prefer the longest matching command phrase, so 'shh whitelist add'
+    # wins over the shorter 'shh'.
+    candidates.sort(key=lambda item: len(item[0]), reverse=True)
+
+    lowered = command_text.lower()
+    for phrase, registered_name in candidates:
+        if lowered == phrase or lowered.startswith(phrase + " "):
+            remainder = command_text[len(phrase):]
+            message.content = matched_prefix + registered_name + remainder
+            return
+
+
 async def on_message(message):
     # Prefix commands must always be dispatched after message listeners.
     if message.author.bot:
         return
+    await normalize_spaced_command(bot, message)
     await bot.process_commands(message)
 
 
@@ -169,9 +219,9 @@ HELP_CATEGORIES = {
     ],
     "AutoMod": [
         ("automod", ",automod <enabled> [block_invites] [block_links] [spam_limit]", "Configure automatic moderation."),
-        ("automod_ignore", ",automod_ignore #channel", "Ignore a channel in AutoMod."),
+        ("automod_ignore", ",automod ignore #channel", "Ignore a channel in AutoMod."),
     ],
-    "Logging": [("logging_set", ",logging_set #channel", "Choose the moderation log channel.")],
+    "Logging": [("logging_set", ",logging set #channel", "Choose the moderation log channel.")],
     "Utility": [
         ("ping", ",ping", "Check ONYX latency."),
         ("userinfo", ",userinfo [@member]", "Show member information."),
@@ -180,29 +230,29 @@ HELP_CATEGORIES = {
         ("botinfo", ",botinfo", "Show ONYX uptime and statistics."),
     ],
     "Welcome": [
-        ("welcome_set", ",welcome_set #channel message...", "Configure welcome messages."),
-        ("goodbye_set", ",goodbye_set message...", "Configure goodbye messages."),
+        ("welcome_set", ",welcome set #channel message...", "Configure welcome messages."),
+        ("goodbye_set", ",goodbye set message...", "Configure goodbye messages."),
     ],
     "Roles": [
-        ("selfrole_add", ",selfrole_add @role", "Add a self-assignable role."),
-        ("selfrole_remove", ",selfrole_remove @role", "Remove a self-assignable role."),
-        ("selfrole_list", ",selfrole_list", "List self-assignable roles."),
+        ("selfrole_add", ",selfrole add @role", "Add a self-assignable role."),
+        ("selfrole_remove", ",selfrole remove @role", "Remove a self-assignable role."),
+        ("selfrole_list", ",selfrole list", "List self-assignable roles."),
         ("role", ",role @role", "Toggle a self-assignable role."),
-        ("rolepanel_create", ",rolepanel_create", "Create a persistent role panel."),
+        ("rolepanel_create", ",rolepanel create", "Create a persistent role panel."),
     ],
     "Levels": [
         ("rank", ",rank [@member]", "View a member's level and XP."),
         ("leaderboard", ",leaderboard", "Show the server XP leaderboard."),
-        ("levels_settings", ",levels_settings <enabled> [#channel]", "Configure XP and level-up settings."),
+        ("levels_settings", ",levels settings <enabled> [#channel]", "Configure XP and level-up settings."),
     ],
     "Custom Commands & Embeds": [
         ("embed", ",embed <title> <description>", "Create and send a custom embed."),
-        ("custom_add", ",custom_add <name> <response>", "Create a custom text command."),
-        ("custom_run", ",custom_run <name>", "Run a saved custom command."),
-        ("custom_remove", ",custom_remove <name>", "Delete a custom command."),
-        ("embed_template_save", ",embed_template_save <name> <title> <description>", "Save an embed template."),
-        ("embed_template_send", ",embed_template_send <name>", "Send a saved embed template."),
-        ("embed_template_delete", ",embed_template_delete <name>", "Delete an embed template."),
+        ("custom_add", ",custom add <name> <response>", "Create a custom text command."),
+        ("custom_run", ",custom run <name>", "Run a saved custom command."),
+        ("custom_remove", ",custom remove <name>", "Delete a custom command."),
+        ("embed_template_save", ",embed template save <name> <title> <description>", "Save an embed template."),
+        ("embed_template_send", ",embed template send <name>", "Send a saved embed template."),
+        ("embed_template_delete", ",embed template delete <name>", "Delete an embed template."),
     ],
     "Last.fm": [
         ("lastfm link", ",lastfm link <username>", "Link your Last.fm account."),
@@ -222,9 +272,9 @@ HELP_CATEGORIES = {
     ],
     "Special Role": [
         ("shh", ",shh @member", "Toggle the configured special role on or off."),
-        ("shh_whitelist_add", ",shh_whitelist_add @member", "Allow a member to use shh (bot owner only)."),
-        ("shh_whitelist_remove", ",shh_whitelist_remove @member", "Remove shh access (bot owner only)."),
-        ("shh_set_role", ",shh_set_role @role", "Configure the special role (bot owner only)."),
+        ("shh_whitelist_add", ",shh whitelist add @member", "Allow a member to use shh (bot owner only)."),
+        ("shh_whitelist_remove", ",shh whitelist remove @member", "Remove shh access (bot owner only)."),
+        ("shh_set_role", ",shh set role @role", "Configure the special role (bot owner only)."),
     ],
 }
 
