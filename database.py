@@ -5,6 +5,7 @@ SQLite remains available for local development.
 """
 import os
 import re
+import asyncio
 from pathlib import Path
 
 import aiosqlite
@@ -91,6 +92,10 @@ class Database:
         self.database_url = database_url or os.getenv("DATABASE_URL")
         self.conn = None
         self.backend = "postgres" if self.database_url else "sqlite"
+        # asyncpg connections cannot run overlapping operations. Discord events
+        # (message handling, prefix lookup, XP, commands) can query concurrently,
+        # so serialize access to this single shared connection.
+        self._connection_lock = asyncio.Lock()
 
     async def connect(self):
         if self.backend == "postgres":
@@ -110,9 +115,7 @@ class Database:
     async def initialize(self):
         if self.backend == "postgres":
             await self.conn.execute(POSTGRES_SCHEMA)
-            # Safe upgrade for databases created by earlier ONYX V5 builds.
-            await self.conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS prefix TEXT NOT NULL DEFAULT ','")
-            # Safe upgrade for databases created by earlier ONYX V5 builds.
+            # Safe upgrade for databases created by earlier ONYX builds.
             await self.conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS prefix TEXT NOT NULL DEFAULT ','")
         else:
             # Import the existing V4 schema for local development.
@@ -141,11 +144,12 @@ class Database:
     async def execute(self, query, params=()):
         if self.backend == "postgres":
             q = self._postgres_query(query)
-            if query.lstrip().upper().startswith("INSERT INTO MOD_CASES"):
-                q = q.rstrip().rstrip(";") + " RETURNING id"
-                new_id = await self.conn.fetchval(q, *params)
-                return ExecuteResult(lastrowid=new_id)
-            await self.conn.execute(q, *params)
+            async with self._connection_lock:
+                if query.lstrip().upper().startswith("INSERT INTO MOD_CASES"):
+                    q = q.rstrip().rstrip(";") + " RETURNING id"
+                    new_id = await self.conn.fetchval(q, *params)
+                    return ExecuteResult(lastrowid=new_id)
+                await self.conn.execute(q, *params)
             return ExecuteResult()
         cursor = await self.conn.execute(query, params)
         await self.conn.commit()
@@ -153,19 +157,22 @@ class Database:
 
     async def fetchone(self, query, params=()):
         if self.backend == "postgres":
-            return await self.conn.fetchrow(self._postgres_query(query), *params)
+            async with self._connection_lock:
+                return await self.conn.fetchrow(self._postgres_query(query), *params)
         cursor = await self.conn.execute(query, params)
         return await cursor.fetchone()
 
     async def fetchall(self, query, params=()):
         if self.backend == "postgres":
-            return await self.conn.fetch(self._postgres_query(query), *params)
+            async with self._connection_lock:
+                return await self.conn.fetch(self._postgres_query(query), *params)
         cursor = await self.conn.execute(query, params)
         return await cursor.fetchall()
 
     async def close(self):
         if self.conn:
             if self.backend == "postgres":
-                await self.conn.close()
+                async with self._connection_lock:
+                    await self.conn.close()
             else:
                 await self.conn.close()

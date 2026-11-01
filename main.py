@@ -61,7 +61,7 @@ class _PrefixResponse:
 
 
 class _PrefixInteraction:
-    """Small adapter allowing existing interaction callbacks to run from prefix commands."""
+    """Bridge cog command callbacks into the prefix-command interface."""
     def __init__(self, ctx):
         self._ctx = ctx
         self.user = ctx.author
@@ -180,7 +180,7 @@ def _make_prefix_leaf(app_command, prefix_name=None):
 
 
 def register_prefix_commands(bot):
-    # App-command definitions remain available, but every feature also gets a prefix form.
+    # The cog command metadata is used only to construct prefix commands; it is never published.
     for app_command in bot.tree.get_commands():
         try:
             prefix_command = _register_prefix_app_command(bot, app_command)
@@ -207,10 +207,11 @@ class CommunityBot(commands.Bot):
             log.info("Loaded %s", path.stem)
         register_prefix_commands(self)
         log.info("Registered prefix command counterparts.")
-        # Global sync publishes slash commands. For development, use a test guild
-        # sync to avoid waiting for global command propagation.
+        # ONYX V6 is prefix-only. Clear any previously published global
+        # application commands so Discord no longer displays slash commands.
+        self.tree.clear_commands(guild=None)
         await self.tree.sync()
-        log.info("Slash commands synced. Database backend: %s", self.db.backend)
+        log.info("Prefix-only commands registered. Database backend: %s", self.db.backend)
 
     async def close(self):
         await self.db.close()
@@ -310,7 +311,7 @@ def _help_embed(prefix, category=None, command=None):
         title="ONYX • Help Center",
         description=(
             f"Browse commands by category using the menus below.\n"
-            f"**Current prefix:** `{prefix}`  •  **Slash commands:** also available\n"
+            f"**Current prefix:** `{prefix}`  •  **Command mode:** Prefix only\n"
             f"Choose a category, then choose a command to see what it does."
         ),
         color=discord.Color.from_rgb(25, 27, 32)
@@ -377,7 +378,7 @@ class OnyxHelpView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
-            await interaction.response.send_message("This help menu belongs to the person who opened it. Use `,help` to open your own.", ephemeral=True)
+            await interaction.response.send_message("This help menu belongs to the person who opened it. Use your server prefix followed by `help` to open your own.", ephemeral=True)
             return False
         return True
 
@@ -408,6 +409,3 @@ async def prefix_help(ctx):
     await _send_help(ctx)
 
 
-@bot.tree.command(name="help", description="Browse ONYX commands by category using dropdown menus.")
-async def help_command(interaction: discord.Interaction):
-    await _send_help(interaction)

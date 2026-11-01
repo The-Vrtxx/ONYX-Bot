@@ -1,68 +1,83 @@
-# ONYX V5
+# ONYX V6 — Prefix Edition
 
-Multi-server Discord bot built with Python, discord.py 2.x, and a database layer supporting PostgreSQL (recommended for hosted deployments) and SQLite (local development).
+ONYX is a modular Discord management bot for multiple servers. Each server has its own settings and text-command prefix.
 
-## Multi-server data separation
-Server-specific tables use `guild_id` to scope moderation cases, warnings, leveling, role panels, settings, custom commands, embed templates, automod ignores, and `/shh` settings. Last.fm links are user-scoped.
+## V6 command mode
 
-## Included features
-Retains the V4 cogs: moderation, automod, logging, utility, welcome/goodbye, roles, levels, custom commands/embeds, Last.fm, and restricted `/shh`. Adds `/setup`, `/settings`, and `/serverdata`.
+ONYX V6 uses **prefix commands only**. The default prefix is `,`; server managers can change it with `,prefix set !`. Previously published global slash commands are cleared during startup.
 
-## Local setup
-1. Install Python 3.10+.
-2. Copy `.env.example` to `.env` and set `DISCORD_TOKEN`.
-3. Leave `DATABASE_URL` blank to use local SQLite.
-4. Run `pip install -r requirements.txt`.
-5. Run `python main.py`.
+Use `,help` to open the interactive category help menu. The help menu shows the server's current prefix.
 
-## Hosted setup (Render + PostgreSQL)
-1. Create a PostgreSQL database with your hosting provider.
-2. Add its private connection string as `DATABASE_URL` in the bot worker's environment.
-3. Add `DISCORD_TOKEN` and `BOT_OWNER_ID`.
-4. Set the worker start command to `python main.py`.
-5. Deploy as a continuously running background worker.
-6. Keep database credentials and bot token private.
+## Features
 
-The PostgreSQL schema initializes automatically on startup. SQLite is used when `DATABASE_URL` is not set.
+- Moderation: ban, kick, timeout, warnings, purge, moderation cases, channel lock and slowmode
+- AutoMod: invite/link/spam controls and ignored channels
+- Logging: message, member and role event logs
+- Welcome and goodbye messages
+- Self-assignable roles and persistent role panels
+- XP, ranks, leaderboards and level settings
+- Custom text commands and saved embed templates
+- Last.fm account linking and now-playing
+- Server setup, settings and server data summaries
+- Special `shh` role toggle with whitelist and owner-only configuration
+- Per-server settings with PostgreSQL support; SQLite for local development
 
-## Important
-- Never commit `.env`, bot tokens, or database credentials.
-- This release initializes a fresh PostgreSQL schema; it does not automatically migrate existing V4 SQLite records.
-- The `/serverdata` command shows counts for selected server-scoped tables; it does not delete data.
-- Slash commands sync globally on startup, so new commands may take time to appear.
-- Test permissions and role hierarchy in a private server before inviting ONYX broadly.
+## Example commands
 
+```text
+,help
+,ping
+,ban @member reason
+,timeout @member 10 reason
+,warn @member reason
+,rank
+,leaderboard
+,prefix show
+,prefix set !
+,shh @member
+```
 
-## Server-specific prefix
+After changing the prefix, use the new prefix for all commands.
 
-ONYX V5 defaults to the comma prefix `,`. Each server can configure its own prefix:
+## Requirements
 
-- `/prefix show` — show the current server prefix
-- `/prefix set` — choose a prefix (1–5 characters, no spaces)
-- `/prefix reset` — restore `,`
+- Python 3.10+
+- A Discord bot application
+- PostgreSQL for hosted multi-server deployments (SQLite is supported locally)
 
-Members can use `,help` to see a note about ONYX's command interface. The existing feature commands are slash commands, so changing the text prefix does not convert those slash commands into text commands. The prefix setting is stored per server in `guild_settings`.
+## Setup
 
+1. Install dependencies: `pip install -r requirements.txt`
+2. Copy `.env.example` to `.env` and fill in the values.
+3. Enable **Server Members Intent** and **Message Content Intent** in the Discord Developer Portal.
+4. Invite ONYX with the bot scope and required permissions.
+5. Run locally with `python main.py`, or deploy as a persistent background worker.
 
-## Prefix commands (V5 prefix conversion)
+## Environment variables
 
-ONYX defaults to the comma prefix `,`. The bot registers prefix-command counterparts for the existing moderation, automod, logging, utility, welcome, roles, levels, custom, Last.fm, server setup, and owner-only commands. Existing slash commands remain available as a fallback.
+```env
+DISCORD_TOKEN=your_bot_token
+BOT_OWNER_ID=your_numeric_discord_user_id
+DATABASE_PATH=data/bot.sqlite3
+DATABASE_URL=
+DEFAULT_PREFIX=,
+LASTFM_API_KEY=
+```
 
-Examples:
-- `,help`
-- `,ban @member reason`
-- `,timeout @member 10 reason`
-- `,rank`
-- `,automod true true false 5`
-- `,lastfm link username`
-- `,prefix show`
-- `,prefix set !`
-- `,prefix reset`
+Keep your bot token and database credentials private. Never commit `.env`.
 
-For multi-word arguments, use quotation marks, for example `,embed "Server News" "Welcome to ONYX"`. Prefix settings are stored per guild in PostgreSQL/SQLite. Text commands require the **Message Content Intent** enabled in the Discord Developer Portal and `intents.message_content = True` in the bot.
+## Render deployment
 
-Prefix wrappers adapt the existing slash-command callbacks. Some interaction-only responses (such as ephemeral replies) are sent as ordinary channel messages when invoked with a text prefix.
+- Runtime: Python
+- Build command: `pip install -r requirements.txt`
+- Start command: `python main.py`
+- Set `DISCORD_TOKEN`, `BOT_OWNER_ID`, and `DATABASE_URL` in the worker's environment.
+- Use the PostgreSQL service's **Internal Database URL** when the worker and database are in the same Render region.
+- Use a paid persistent Background Worker for continuous operation; check current provider pricing before enabling paid services.
 
-## Interactive help menu
+## Notes
 
-Use `,help` or `/help` to open the ONYX embed help center. Select a category from the first dropdown, then select a command from the second dropdown to view its usage and description. The menu is restricted to the user who opened it and expires after three minutes. The displayed prefix follows the current server prefix setting.
+- V6 keeps the existing V5 database schema and data model.
+- The PostgreSQL adapter serializes access to its shared asyncpg connection.
+- The first V6 startup clears previously published global slash commands. Discord may take a short time to refresh the command picker.
+- Review the privacy policy and terms on your ONYX website so they accurately describe your actual data practices.
