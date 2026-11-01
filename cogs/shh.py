@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 import discord
 from discord.ext import commands
@@ -9,47 +10,73 @@ async def is_bot_owner(ctx: commands.Context) -> bool:
     return await ctx.bot.is_owner(ctx.author)
 
 
-def _extract_id(value: str):
-    """Accept raw IDs and Discord mention forms."""
-    digits = "".join(char for char in value if char.isdigit())
-    return int(digits) if digits else None
+def _member_id_from_text(value: str):
+    """Extract an ID only from a real Discord mention or a plain numeric ID."""
+    value = value.strip()
+    mention = re.fullmatch(r"<@!?(\d+)>", value)
+    if mention:
+        return int(mention.group(1))
+    if value.isdecimal():
+        return int(value)
+    return None
 
 
-async def resolve_member(ctx: commands.Context, value: str):
-    """Resolve a member from a mention, ID, username, display name, or nickname."""
-    if not value:
+async def resolve_member(ctx: commands.Context, value: str = None):
+    """Resolve self, an actual message mention, a numeric ID, or a cached name."""
+    if not value or not value.strip():
         return ctx.author
-    member_id = _extract_id(value)
-    if member_id is not None:
-        member = ctx.guild.get_member(member_id)
-        if member is not None:
-            return member
+
+    value = value.strip()
+
+    # Prefer Discord's parsed mention list. This avoids fragile text parsing
+    # when the user sends a real @mention.
+    if ctx.message.mentions:
+        target_id = _member_id_from_text(value)
+        if target_id is not None:
+            for mentioned in ctx.message.mentions:
+                if mentioned.id == target_id:
+                    return mentioned
+
+    target_id = _member_id_from_text(value)
+    if target_id is not None:
+        cached = ctx.guild.get_member(target_id)
+        if cached is not None:
+            return cached
         try:
-            return await ctx.guild.fetch_member(member_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            # Fetch by ID from Discord instead of depending on member cache.
+            return await ctx.guild.fetch_member(target_id)
+        except discord.NotFound:
+            return None
+        except discord.Forbidden:
+            return None
+        except discord.HTTPException:
             return None
 
-    wanted = value.strip().strip('"').strip("'").casefold()
-    for member in ctx.guild.members:
+    wanted = value.strip('"').strip("'").casefold()
+    matches = [
+        member for member in ctx.guild.members
         if wanted in {
             member.name.casefold(),
             member.display_name.casefold(),
             str(member).casefold(),
-        }:
-            return member
-    return None
+        }
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def resolve_role(ctx: commands.Context, value: str):
-    """Resolve a role from a mention, ID, or its full name (including spaces)."""
-    role_id = _extract_id(value)
+    """Resolve a role from a mention, ID, or exact role name."""
+    value = value.strip()
+    mention = re.fullmatch(r"<@&(\d+)>", value)
+    role_id = int(mention.group(1)) if mention else (
+        int(value) if value.isdecimal() else None
+    )
     if role_id is not None:
         return ctx.guild.get_role(role_id)
-    wanted = value.strip().strip('"').strip("'").casefold()
-    return discord.utils.find(
-        lambda role: role.name.casefold() == wanted,
-        ctx.guild.roles,
-    )
+
+    wanted = value.strip('"').strip("'").casefold()
+    matches = [role for role in ctx.guild.roles if role.name.casefold() == wanted]
+    return matches[0] if len(matches) == 1 else None
 
 
 class Shh(commands.Cog):
@@ -98,7 +125,7 @@ class Shh(commands.Cog):
         member = await resolve_member(ctx, member_text)
         if member is None:
             return await self._temporary_reply(
-                ctx, "I couldn't find that member. Mention them or provide their user ID."
+                ctx, "I couldn't resolve that member. Use a real Discord @mention (select them from the member picker) or paste their numeric user ID. If using an ID, make sure it belongs to someone in this server."
             )
 
         allowed = await self.bot.db.fetchone(
@@ -176,7 +203,7 @@ class Shh(commands.Cog):
         user = await resolve_member(ctx, user_text)
         if user is None:
             return await self._temporary_reply(
-                ctx, "I couldn't find that member. Mention them or provide their user ID."
+                ctx, "I couldn't resolve that member. Use a real Discord @mention (select them from the member picker) or paste their numeric user ID. If using an ID, make sure it belongs to someone in this server."
             )
         await self.bot.db.execute(
             "INSERT INTO shh_whitelist (guild_id,user_id) VALUES (?,?) ON CONFLICT DO NOTHING",
@@ -196,7 +223,7 @@ class Shh(commands.Cog):
         user = await resolve_member(ctx, user_text)
         if user is None:
             return await self._temporary_reply(
-                ctx, "I couldn't find that member. Mention them or provide their user ID."
+                ctx, "I couldn't resolve that member. Use a real Discord @mention (select them from the member picker) or paste their numeric user ID. If using an ID, make sure it belongs to someone in this server."
             )
         await self.bot.db.execute(
             "DELETE FROM shh_whitelist WHERE guild_id=? AND user_id=?",
