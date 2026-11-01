@@ -1,22 +1,14 @@
 import os
 import logging
-import inspect
-import shlex
 from pathlib import Path
-from typing import get_origin, get_args, Union
-import types
-
 import discord
 from discord.ext import commands
-from discord import app_commands
 from dotenv import load_dotenv
-
 from database import Database
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("bot")
-
 TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0") or 0)
 DB_PATH = os.getenv("DATABASE_PATH", "data/bot.sqlite3")
@@ -29,170 +21,18 @@ intents.guilds = True
 intents.moderation = True
 
 async def get_prefix(bot, message):
-    # Each server gets its own prefix; DMs fall back to the default.
     prefix = ","
     if message.guild is not None and getattr(bot, "db", None) is not None:
         try:
-            row = await bot.db.fetchone(
-                "SELECT prefix FROM guild_settings WHERE guild_id=?",
-                (message.guild.id,)
-            )
-            if row and row["prefix"]:
-                prefix = row["prefix"]
+            row = await bot.db.fetchone("SELECT prefix FROM guild_settings WHERE guild_id=?", (message.guild.id,))
+            if row and row["prefix"]: prefix = row["prefix"]
         except Exception:
             log.exception("Could not load prefix for guild %s; using default", message.guild.id)
     return commands.when_mentioned_or(prefix)(bot, message)
 
-
-class _PrefixResponse:
-    def __init__(self, ctx):
-        self.ctx = ctx
-        self._done = False
-
-    async def send_message(self, content=None, *, embed=None, embeds=None, **kwargs):
-        self._done = True
-        await self.ctx.send(content=content, embed=embed, embeds=embeds, allowed_mentions=kwargs.get("allowed_mentions"))
-
-    async def defer(self, **kwargs):
-        self._done = True
-
-    def is_done(self):
-        return self._done
-
-
-class _PrefixInteraction:
-    """Bridge cog command callbacks into the prefix-command interface."""
-    def __init__(self, ctx):
-        self._ctx = ctx
-        self.user = ctx.author
-        self.guild = ctx.guild
-        self.channel = ctx.channel
-        self.client = ctx.bot
-        self.response = _PrefixResponse(ctx)
-        self.followup = self.response
-        self.permissions = getattr(ctx.author, "guild_permissions", discord.Permissions.none())
-        me = ctx.guild.me if ctx.guild else None
-        self.app_permissions = getattr(me, "guild_permissions", discord.Permissions.none())
-
-
-async def _convert_prefix_argument(ctx, annotation, token, parameter):
-    origin = get_origin(annotation)
-    args = get_args(annotation)
-    if origin in (Union, types.UnionType) and type(None) in args:
-        annotation = next((a for a in args if a is not type(None)), str)
-    # app_commands.Choice[T] is represented as the underlying value for text commands.
-    if getattr(annotation, "__name__", "") == "Choice" or getattr(origin, "__name__", "") == "Choice":
-        annotation = str
-    if annotation is inspect.Parameter.empty or annotation is str:
-        return token
-    if annotation is bool:
-        lowered = token.lower()
-        if lowered in ("true", "yes", "on", "1", "enable", "enabled"):
-            return True
-        if lowered in ("false", "no", "off", "0", "disable", "disabled"):
-            return False
-        raise commands.BadArgument(f"'{token}' isn't a boolean. Use true or false.")
-    if annotation is int:
-        try:
-            return int(token)
-        except ValueError as exc:
-            raise commands.BadArgument(f"'{token}' must be a whole number.") from exc
-    return await commands.run_converters(ctx, annotation, token, parameter)
-
-
-def _register_prefix_app_command(bot, app_command, prefix_name=None):
-    """Expose every existing app-command callback as a prefix command too."""
-    if isinstance(app_command, app_commands.Group):
-        group_name = prefix_name or app_command.name
-        async def group_callback(ctx):
-            await ctx.send(f"Use `{ctx.prefix}{group_name} <subcommand>`. Try `{ctx.prefix}help` for examples.")
-        group = commands.Group(name=group_name, callback=group_callback, invoke_without_command=True)
-        for child in app_command.commands:
-            if isinstance(child, app_commands.Group):
-                nested = _register_prefix_app_command(bot, child)
-                group.add_command(nested)
-            else:
-                group.add_command(_make_prefix_leaf(child))
-        return group
-    return _make_prefix_leaf(app_command, prefix_name)
-
-
-def _make_prefix_leaf(app_command, prefix_name=None):
-    name = prefix_name or app_command.name
-    callback = app_command.callback
-    binding = getattr(app_command, "binding", None)
-    params = list(getattr(app_command, "parameters", []))
-
-    async def invoke(ctx, *, raw=""):
-        if ctx.guild is None:
-            return await ctx.send("This command can only be used inside a server.")
-        interaction = _PrefixInteraction(ctx)
-        # Re-run the original application-command permission/check predicates.
-        for predicate in getattr(app_command, "checks", []):
-            passed = predicate(interaction)
-            if inspect.isawaitable(passed):
-                passed = await passed
-            if not passed:
-                return await ctx.send("You don't have permission to use that command, or the bot lacks a required permission.")
-        try:
-            tokens = shlex.split(raw) if raw else []
-        except ValueError as exc:
-            return await ctx.send(f"Couldn't parse arguments: {exc}")
-        values = {}
-        cursor = 0
-        for index, parameter in enumerate(params):
-            required = getattr(parameter, "required", True)
-            default = getattr(parameter, "default", inspect.Parameter.empty)
-            annotation = getattr(parameter, "annotation", str)
-            if cursor >= len(tokens):
-                if required:
-                    return await ctx.send(f"Missing argument: `{parameter.name}`. Use `{ctx.prefix}help` for guidance.")
-                values[parameter.name] = None if default is inspect.Parameter.empty else default
-                continue
-            # Final string parameter receives the remaining text, allowing natural phrases.
-            annotation_origin = get_origin(annotation)
-            if index == len(params) - 1 and (annotation is str or getattr(annotation, "__name__", "") == "Choice" or getattr(annotation_origin, "__name__", "") == "Choice"):
-                token = " ".join(tokens[cursor:])
-                cursor = len(tokens)
-            else:
-                token = tokens[cursor]
-                cursor += 1
-            try:
-                values[parameter.name] = await _convert_prefix_argument(
-                    ctx, annotation, token, inspect.Parameter(parameter.name, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-                )
-            except (commands.CommandError, ValueError, TypeError) as exc:
-                return await ctx.send(f"Invalid `{parameter.name}`: {exc}")
-        if cursor < len(tokens):
-            return await ctx.send("Too many arguments. Put multi-word text in quotation marks.")
-        try:
-            if binding is not None:
-                await callback(binding, interaction, **values)
-            else:
-                await callback(interaction, **values)
-        except discord.Forbidden:
-            await ctx.send("I don't have permission to do that. Check my role position and channel permissions.")
-        except discord.HTTPException as exc:
-            await ctx.send(f"Discord couldn't complete that action: {exc}")
-
-    invoke.__name__ = f"prefix_{name.replace('-', '_')}"
-    return commands.Command(invoke, name=name, help=getattr(app_command, "description", "ONYX command"))
-
-
-def register_prefix_commands(bot):
-    # The cog command metadata is used only to construct prefix commands; it is never published.
-    for app_command in bot.tree.get_commands():
-        try:
-            prefix_command = _register_prefix_app_command(bot, app_command)
-            if bot.get_command(prefix_command.name) is None:
-                bot.add_command(prefix_command)
-        except Exception:
-            log.exception("Could not register prefix command for %s", getattr(app_command, "name", "unknown"))
-
-
 class CommunityBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix=get_prefix, intents=intents)
+        super().__init__(command_prefix=get_prefix, intents=intents, help_command=None)
         self.db = Database(DB_PATH, DATABASE_URL)
         self.owner_id = OWNER_ID
         self.started_at = discord.utils.utcnow()
@@ -201,17 +41,14 @@ class CommunityBot(commands.Bot):
         await self.db.connect()
         await self.db.initialize()
         for path in sorted(Path("cogs").glob("*.py")):
-            if path.name.startswith("_"):
-                continue
+            if path.name.startswith("_"): continue
             await self.load_extension(f"cogs.{path.stem}")
             log.info("Loaded %s", path.stem)
-        register_prefix_commands(self)
-        log.info("Registered prefix command counterparts.")
-        # ONYX V6 is prefix-only. Clear any previously published global
-        # application commands so Discord no longer displays slash commands.
+        # Remove legacy global slash commands published by earlier ONYX versions.
+        # The command tree is intentionally left empty; ONYX exposes message-prefix commands only.
         self.tree.clear_commands(guild=None)
         await self.tree.sync()
-        log.info("Prefix-only commands registered. Database backend: %s", self.db.backend)
+        log.info("Legacy global application commands cleared; prefix-only command system ready. Database backend: %s", self.db.backend)
 
     async def close(self):
         await self.db.close()
@@ -222,12 +59,7 @@ bot = CommunityBot()
 @bot.event
 async def on_ready():
     log.info("Logged in as %s (%s)", bot.user, bot.user.id)
-    await bot.change_presence(activity=discord.Activity(
-        type=discord.ActivityType.watching, name=",help • your server"
-    ))
-
-# Replace discord.py's built-in help command with an interactive ONYX help panel.
-bot.remove_command("help")
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=",help • your server"))
 
 HELP_CATEGORIES = {
     "Moderation": [
@@ -240,13 +72,13 @@ HELP_CATEGORIES = {
         ("purge", ",purge <amount>", "Delete recent messages."),
         ("modlogs", ",modlogs @member", "View recent moderation cases."),
         ("case", ",case <case_id>", "Look up a moderation case."),
-        ("warn_escalation", ",warn_escalation <threshold> <action>", "Configure automatic action after repeated warnings."),
+        ("warn_escalation", ",warn_escalation <threshold> <timeout|kick|ban>", "Configure automatic action after repeated warnings."),
         ("lock", ",lock", "Lock the current text channel."),
         ("unlock", ",unlock", "Unlock the current text channel."),
         ("slowmode", ",slowmode <seconds>", "Set channel slowmode."),
     ],
     "AutoMod": [
-        ("automod", ",automod", "Configure automatic moderation."),
+        ("automod", ",automod <enabled> [block_invites] [block_links] [spam_limit]", "Configure automatic moderation."),
         ("automod_ignore", ",automod_ignore #channel", "Ignore a channel in AutoMod."),
     ],
     "Logging": [("logging_set", ",logging_set #channel", "Choose the moderation log channel.")],
@@ -258,8 +90,8 @@ HELP_CATEGORIES = {
         ("botinfo", ",botinfo", "Show ONYX uptime and statistics."),
     ],
     "Welcome": [
-        ("welcome_set", ",welcome_set #channel [message]", "Configure welcome messages."),
-        ("goodbye_set", ",goodbye_set [message]", "Configure goodbye messages."),
+        ("welcome_set", ",welcome_set #channel message...", "Configure welcome messages."),
+        ("goodbye_set", ",goodbye_set message...", "Configure goodbye messages."),
     ],
     "Roles": [
         ("selfrole_add", ",selfrole_add @role", "Add a self-assignable role."),
@@ -271,7 +103,7 @@ HELP_CATEGORIES = {
     "Levels": [
         ("rank", ",rank [@member]", "View a member's level and XP."),
         ("leaderboard", ",leaderboard", "Show the server XP leaderboard."),
-        ("levels_settings", ",levels_settings", "Configure XP and level-up settings."),
+        ("levels_settings", ",levels_settings <enabled> [#channel]", "Configure XP and level-up settings."),
     ],
     "Custom Commands & Embeds": [
         ("embed", ",embed", "Create and send a custom embed."),
@@ -298,7 +130,7 @@ HELP_CATEGORIES = {
         ("serverdata", ",serverdata", "Explain the server data ONYX stores."),
     ],
     "Special Role": [
-        ("shh", ",shh @member", "Quietly assign the configured special role."),
+        ("shh", ",shh @member", "Toggle the configured special role on or off."),
         ("shh_whitelist_add", ",shh_whitelist_add @member", "Allow a member to use shh (bot owner only)."),
         ("shh_whitelist_remove", ",shh_whitelist_remove @member", "Remove shh access (bot owner only)."),
         ("shh_set_role", ",shh_set_role @role", "Configure the special role (bot owner only)."),
@@ -311,7 +143,7 @@ def _help_embed(prefix, category=None, command=None):
         title="ONYX • Help Center",
         description=(
             f"Browse commands by category using the menus below.\n"
-            f"**Current prefix:** `{prefix}`  •  **Command mode:** Prefix only\n"
+            f"**Current prefix:** `{prefix}`  •  **Prefix commands only**\n"
             f"Choose a category, then choose a command to see what it does."
         ),
         color=discord.Color.from_rgb(25, 27, 32)
@@ -378,7 +210,7 @@ class OnyxHelpView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
-            await interaction.response.send_message("This help menu belongs to the person who opened it. Use your server prefix followed by `help` to open your own.", ephemeral=True)
+            await interaction.response.send_message("This help menu belongs to the person who opened it. Use `,help` to open your own.", ephemeral=True)
             return False
         return True
 
@@ -387,25 +219,16 @@ class OnyxHelpView(discord.ui.View):
             item.disabled = True
 
 
-async def _send_help(ctx_or_interaction):
-    guild = getattr(ctx_or_interaction, "guild", None)
-    prefix = ","
-    bot_instance = getattr(ctx_or_interaction, "bot", None) or getattr(ctx_or_interaction, "client", None)
-    if guild and bot_instance and getattr(bot_instance, "db", None):
-        row = await bot_instance.db.fetchone("SELECT prefix FROM guild_settings WHERE guild_id=?", (guild.id,))
-        if row and row["prefix"]:
-            prefix = row["prefix"]
-    author = getattr(ctx_or_interaction, "author", None) or getattr(ctx_or_interaction, "user", None)
-    view = OnyxHelpView(prefix, author.id)
-    embed = _help_embed(prefix)
-    if hasattr(ctx_or_interaction, "response"):
-        await ctx_or_interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    else:
-        await ctx_or_interaction.send(embed=embed, view=view)
-
+async def _send_help(ctx):
+    prefix = ctx.prefix
+    view = OnyxHelpView(prefix, ctx.author.id)
+    await ctx.send(embed=_help_embed(prefix), view=view)
 
 @bot.command(name="help")
 async def prefix_help(ctx):
     await _send_help(ctx)
 
-
+if __name__ == "__main__":
+    if not TOKEN:
+        raise RuntimeError("DISCORD_TOKEN is missing. Add it to your environment or .env file.")
+    bot.run(TOKEN)

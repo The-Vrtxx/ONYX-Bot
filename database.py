@@ -115,7 +115,9 @@ class Database:
     async def initialize(self):
         if self.backend == "postgres":
             await self.conn.execute(POSTGRES_SCHEMA)
-            # Safe upgrade for databases created by earlier ONYX builds.
+            # Safe upgrade for databases created by earlier ONYX V5 builds.
+            await self.conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS prefix TEXT NOT NULL DEFAULT ','")
+            # Safe upgrade for databases created by earlier ONYX V5 builds.
             await self.conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS prefix TEXT NOT NULL DEFAULT ','")
         else:
             # Import the existing V4 schema for local development.
