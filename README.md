@@ -31,3 +31,14 @@ The PostgreSQL schema initializes automatically on startup. SQLite is used when 
 - The `/serverdata` command shows counts for selected server-scoped tables; it does not delete data.
 - Slash commands sync globally on startup, so new commands may take time to appear.
 - Test permissions and role hierarchy in a private server before inviting ONYX broadly.
+
+
+## Server-specific prefix
+
+ONYX V5 defaults to the comma prefix `,`. Each server can configure its own prefix:
+
+- `/prefix show` — show the current server prefix
+- `/prefix set` — choose a prefix (1–5 characters, no spaces)
+- `/prefix reset` — restore `,`
+
+Members can use `,help` to see a note about ONYX's command interface. The existing feature commands are slash commands, so changing the text prefix does not convert those slash commands into text commands. The prefix setting is stored per server in `guild_settings`.

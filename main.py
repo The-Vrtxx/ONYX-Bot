@@ -23,9 +23,25 @@ intents.message_content = True
 intents.guilds = True
 intents.moderation = True
 
+async def get_prefix(bot, message):
+    # Each server gets its own prefix; DMs fall back to the default.
+    prefix = ","
+    if message.guild is not None and getattr(bot, "db", None) is not None:
+        try:
+            row = await bot.db.fetchone(
+                "SELECT prefix FROM guild_settings WHERE guild_id=?",
+                (message.guild.id,)
+            )
+            if row and row["prefix"]:
+                prefix = row["prefix"]
+        except Exception:
+            log.exception("Could not load prefix for guild %s; using default", message.guild.id)
+    return commands.when_mentioned_or(prefix)(bot, message)
+
+
 class CommunityBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix=commands.when_mentioned, intents=intents)
+        super().__init__(command_prefix=get_prefix, intents=intents)
         self.db = Database(DB_PATH, DATABASE_URL)
         self.owner_id = OWNER_ID
         self.started_at = discord.utils.utcnow()
@@ -55,6 +71,19 @@ async def on_ready():
     await bot.change_presence(activity=discord.Activity(
         type=discord.ActivityType.watching, name="/help • your server"
     ))
+
+# Replace discord.py's built-in text help command with ONYX-specific guidance.
+bot.remove_command("help")
+
+
+@bot.command(name="help")
+async def prefix_help(ctx):
+    await ctx.send(
+        "I'm ONYX! My server prefix is enabled, but most ONYX features currently "
+        "use Discord slash commands. Type `/` to browse them, or use `/prefix show` "
+        "to view this server's prefix."
+    )
+
 
 @bot.tree.command(name="help", description="Browse the bot's command categories.")
 async def help_command(interaction: discord.Interaction):

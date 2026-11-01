@@ -12,7 +12,7 @@ import aiosqlite
 POSTGRES_SCHEMA = r"""
 
 CREATE TABLE IF NOT EXISTS guild_settings (
- guild_id BIGINT PRIMARY KEY, log_channel_id BIGINT, welcome_channel_id BIGINT,
+ guild_id BIGINT PRIMARY KEY, prefix TEXT NOT NULL DEFAULT ',', log_channel_id BIGINT, welcome_channel_id BIGINT,
  welcome_message TEXT DEFAULT 'Welcome {mention} to **{server}**!',
  goodbye_message TEXT DEFAULT '{user} has left {server}.',
  automod_enabled INTEGER DEFAULT 0, block_invites INTEGER DEFAULT 0,
@@ -110,11 +110,19 @@ class Database:
     async def initialize(self):
         if self.backend == "postgres":
             await self.conn.execute(POSTGRES_SCHEMA)
+            # Safe upgrade for databases created by earlier ONYX V5 builds.
+            await self.conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS prefix TEXT NOT NULL DEFAULT ','")
+            # Safe upgrade for databases created by earlier ONYX V5 builds.
+            await self.conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS prefix TEXT NOT NULL DEFAULT ','")
         else:
             # Import the existing V4 schema for local development.
             from pathlib import Path
             old_schema = Path(__file__).with_name("database_v4_schema.sql")
             await self.conn.executescript(old_schema.read_text(encoding="utf-8"))
+            # Safe upgrade for existing local SQLite databases.
+            columns = await (await self.conn.execute("PRAGMA table_info(guild_settings)")).fetchall()
+            if not any(column["name"] == "prefix" for column in columns):
+                await self.conn.execute("ALTER TABLE guild_settings ADD COLUMN prefix TEXT NOT NULL DEFAULT ','")
             await self.conn.commit()
 
     @staticmethod

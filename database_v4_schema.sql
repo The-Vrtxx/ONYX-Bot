@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS guild_settings (
- guild_id INTEGER PRIMARY KEY, log_channel_id INTEGER, welcome_channel_id INTEGER,
+ guild_id INTEGER PRIMARY KEY, prefix TEXT NOT NULL DEFAULT ',', log_channel_id INTEGER, welcome_channel_id INTEGER,
  welcome_message TEXT DEFAULT 'Welcome {mention} to **{server}**!',
  goodbye_message TEXT DEFAULT '{user} has left {server}.',
  automod_enabled INTEGER DEFAULT 0, block_invites INTEGER DEFAULT 0,
