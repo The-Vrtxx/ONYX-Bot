@@ -42,3 +42,23 @@ ONYX V5 defaults to the comma prefix `,`. Each server can configure its own pref
 - `/prefix reset` — restore `,`
 
 Members can use `,help` to see a note about ONYX's command interface. The existing feature commands are slash commands, so changing the text prefix does not convert those slash commands into text commands. The prefix setting is stored per server in `guild_settings`.
+
+
+## Prefix commands (V5 prefix conversion)
+
+ONYX defaults to the comma prefix `,`. The bot registers prefix-command counterparts for the existing moderation, automod, logging, utility, welcome, roles, levels, custom, Last.fm, server setup, and owner-only commands. Existing slash commands remain available as a fallback.
+
+Examples:
+- `,help`
+- `,ban @member reason`
+- `,timeout @member 10 reason`
+- `,rank`
+- `,automod true true false 5`
+- `,lastfm link username`
+- `,prefix show`
+- `,prefix set !`
+- `,prefix reset`
+
+For multi-word arguments, use quotation marks, for example `,embed "Server News" "Welcome to ONYX"`. Prefix settings are stored per guild in PostgreSQL/SQLite. Text commands require the **Message Content Intent** enabled in the Discord Developer Portal and `intents.message_content = True` in the bot.
+
+Prefix wrappers adapt the existing slash-command callbacks. Some interaction-only responses (such as ephemeral replies) are sent as ordinary channel messages when invoked with a text prefix.
