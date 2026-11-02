@@ -85,6 +85,14 @@ Roles and Command Help
 * Expanded role-management functionality with role creation and deletion, auto roles, and reaction roles.
 * Updated the help system to build its command index from loaded commands so new commands can appear automatically.
 
+### Anti-Nuke Protection
+
+- Added configurable threshold-based anti-nuke detection.
+- Added ban, kick, jail, and staff-role stripping punishments.
+- Added trusted-user whitelist management.
+- Added configurable jail and staff roles.
+- Added security event logging and protection status commands.
+
 Reporting Issues
 
 When reporting a problem, include the command used, the error message, and relevant Render log output. Remove tokens, passwords, database URLs, and other private values before sharing logs.
