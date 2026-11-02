@@ -64,15 +64,41 @@ class CommunityBot(commands.Bot):
         self.started_at = discord.utils.utcnow()
 
     async def setup_hook(self):
-        await self.db.connect()
-        await self.db.initialize()
+        # Database failure is critical because the cogs depend on it.
+        try:
+            await self.db.connect()
+            await self.db.initialize()
+        except Exception as exc:
+            log.critical(
+                "Database startup failed (%s). Check DATABASE_URL, "
+                "database availability, and database permissions.",
+                type(exc).__name__,
+                exc_info=True
+            )
+            raise RuntimeError(
+                "ONYX could not connect to or initialize its database. "
+                "Check the Render logs and DATABASE_URL."
+            ) from exc
+
+        loaded = []
+        failed = []
 
         for path in sorted(Path("cogs").glob("*.py")):
             if path.name.startswith("_"):
                 continue
 
-            await self.load_extension(f"cogs.{path.stem}")
-            log.info("Loaded %s", path.stem)
+            extension = f"cogs.{path.stem}"
+            try:
+                await self.load_extension(extension)
+                loaded.append(path.stem)
+                log.info("Loaded cog: %s", path.stem)
+            except Exception as exc:
+                failed.append(path.stem)
+                log.exception(
+                    "Could not load cog %s (%s). Other cogs will continue loading.",
+                    path.stem,
+                    type(exc).__name__
+                )
 
         # Remove legacy global slash commands.
         # ONYX uses prefix commands only.
@@ -80,9 +106,13 @@ class CommunityBot(commands.Bot):
         await self.tree.sync()
 
         log.info(
-            "Prefix-only command system ready. Database backend: %s",
-            self.db.backend
+            "Startup complete. Database backend: %s | Cogs loaded: %s | Cogs failed: %s",
+            self.db.backend,
+            len(loaded),
+            len(failed)
         )
+        if failed:
+            log.error("Cogs that failed to load: %s", ", ".join(failed))
 
     async def close(self):
         await self.db.close()
@@ -511,7 +541,22 @@ class OnyxHelpView(discord.ui.View):
         self.category_select = HelpCategorySelect(self)
         self.add_item(self.category_select)
 
-        # The opening screen intentionally has only the category dropdown.
+        # The initial welcome screen contains only the category dropdown.
+        self.previous_button = discord.ui.Button(
+            label="Previous",
+            style=discord.ButtonStyle.secondary,
+            emoji="◀️",
+            row=1,
+            disabled=True
+        )
+        self.next_button = discord.ui.Button(
+            label="Next",
+            style=discord.ButtonStyle.secondary,
+            emoji="▶️",
+            row=1
+        )
+        self.previous_button.callback = self._previous_page
+        self.next_button.callback = self._next_page
         self._pagination_added = False
 
     def _page_count(self):
@@ -524,17 +569,17 @@ class OnyxHelpView(discord.ui.View):
         total_pages = self._page_count()
 
         if total_pages > 1 and not self._pagination_added:
-            self.add_item(self.previous_page)
-            self.add_item(self.next_page)
+            self.add_item(self.previous_button)
+            self.add_item(self.next_button)
             self._pagination_added = True
         elif total_pages <= 1 and self._pagination_added:
-            self.remove_item(self.previous_page)
-            self.remove_item(self.next_page)
+            self.remove_item(self.previous_button)
+            self.remove_item(self.next_button)
             self._pagination_added = False
 
         if self._pagination_added:
-            self.previous_page.disabled = self.page <= 0
-            self.next_page.disabled = self.page >= total_pages - 1
+            self.previous_button.disabled = self.page <= 0
+            self.next_button.disabled = self.page >= total_pages - 1
 
     async def _change_page(self, interaction, direction):
         total_pages = self._page_count()
@@ -550,22 +595,10 @@ class OnyxHelpView(discord.ui.View):
             view=self
         )
 
-    @discord.ui.button(
-        label="Previous",
-        style=discord.ButtonStyle.secondary,
-        emoji="◀️",
-        row=1
-    )
-    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _previous_page(self, interaction: discord.Interaction):
         await self._change_page(interaction, -1)
 
-    @discord.ui.button(
-        label="Next",
-        style=discord.ButtonStyle.secondary,
-        emoji="▶️",
-        row=1
-    )
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _next_page(self, interaction: discord.Interaction):
         await self._change_page(interaction, 1)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -624,7 +657,12 @@ async def prefix_help(ctx, *, command: str = None):
 if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError(
-            "DISCORD_TOKEN is missing. "
-            "Add it to your environment or .env file."
+            "DISCORD_TOKEN is missing. Add it to Render's environment "
+            "variables or your local .env file. Never commit the real token."
+        )
+    if not OWNER_ID:
+        log.warning(
+            "BOT_OWNER_ID is not set. Owner-only commands may not work "
+            "until you configure it."
         )
     bot.run(TOKEN)
