@@ -1,3 +1,4 @@
+import secrets
 
 import discord
 from discord.ext import commands
@@ -18,28 +19,20 @@ class ConfirmActionView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(
-        label="Confirm",
-        style=discord.ButtonStyle.danger
-    )
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction, button):
         self.confirmed = True
         self.stop()
         await interaction.response.edit_message(
-            content="Confirmed. Processing the action...",
-            view=None
+            content="Confirmed. Processing the action...", view=None
         )
 
-    @discord.ui.button(
-        label="Cancel",
-        style=discord.ButtonStyle.secondary
-    )
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction, button):
         self.confirmed = False
         self.stop()
         await interaction.response.edit_message(
-            content="Action cancelled.",
-            view=None
+            content="Action cancelled.", view=None
         )
 
     async def on_timeout(self):
@@ -50,10 +43,7 @@ class ConfirmActionView(discord.ui.View):
 class ChannelManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
-    # -----------------------------------------------
-    # CHANNEL COMMAND GROUP
-    # -----------------------------------------------
+        self.pending_nukes = set()
 
     @commands.group(
         name="channel",
@@ -64,73 +54,44 @@ class ChannelManager(commands.Cog):
     async def channel(self, ctx):
         await ctx.send(
             "**Channel Management**\n"
-            "` ,channel create <name>` - Create a text channel\n"
-            "` ,channel delete #channel` - Delete a text channel"
-            .replace("` ,", "`,")
+            "`,channel create <name>` - Create a text channel\n"
+            "`,channel delete #channel` - Delete a text channel"
         )
 
-    @channel.command(
-        name="create",
-        help="Create a new text channel."
-    )
+    @channel.command(name="create", help="Create a new text channel.")
     @commands.has_permissions(manage_channels=True)
     async def create_channel(self, ctx, *, name: str):
         name = name.strip().lower().replace(" ", "-")
-
         if not name or len(name) > 100:
             return await ctx.send(
                 "Channel names must be between 1 and 100 characters."
             )
-
         try:
             channel = await ctx.guild.create_text_channel(
-                name=name,
-                reason=f"Created by {ctx.author} using ONYX."
+                name=name, reason=f"Created by {ctx.author} using ONYX."
             )
-
-            await ctx.send(
-                f"Created text channel {channel.mention}."
-            )
-
+            await ctx.send(f"Created text channel {channel.mention}.")
         except discord.Forbidden:
-            await ctx.send(
-                "I don't have permission to create channels."
-            )
+            await ctx.send("I don't have permission to create channels.")
         except discord.HTTPException:
-            await ctx.send(
-                "Discord couldn't create that channel."
-            )
+            await ctx.send("Discord couldn't create that channel.")
 
     @channel.command(
-        name="delete",
-        help="Delete a text channel after confirmation."
+        name="delete", help="Delete a text channel after confirmation."
     )
     @commands.has_permissions(manage_channels=True)
-    async def delete_channel(
-        self,
-        ctx,
-        channel: discord.TextChannel
-    ):
-        if channel.id == ctx.channel.id:
-            warning = (
-                f"You're about to delete the channel where this command "
-                f"was used: {channel.mention}."
-            )
-        else:
-            warning = (
-                f"You're about to permanently delete {channel.mention}."
-            )
-
+    async def delete_channel(self, ctx, channel: discord.TextChannel):
+        warning = (
+            f"You're about to permanently delete {channel.mention}."
+            if channel.id != ctx.channel.id
+            else f"You're about to delete this channel: {channel.mention}."
+        )
         view = ConfirmActionView(ctx.author.id)
-
         message = await ctx.send(
-            f"**Confirm channel deletion**\n{warning}\n"
-            "This cannot be undone.",
+            f"**Confirm channel deletion**\n{warning}\nThis cannot be undone.",
             view=view
         )
-
         await view.wait()
-
         if not view.confirmed:
             if not view.is_finished():
                 await message.edit(
@@ -138,95 +99,141 @@ class ChannelManager(commands.Cog):
                     view=None
                 )
             return
-
         try:
             await channel.delete(
                 reason=f"Deleted by {ctx.author} using ONYX."
             )
-
             try:
-                await ctx.send(
-                    f"Deleted channel **#{channel.name}**."
-                )
+                await ctx.send(f"Deleted channel **#{channel.name}**.")
             except discord.HTTPException:
                 pass
-
         except discord.Forbidden:
-            await ctx.send(
-                "I don't have permission to delete that channel."
-            )
+            await ctx.send("I don't have permission to delete that channel.")
         except discord.HTTPException:
-            await ctx.send(
-                "Discord couldn't delete that channel."
-            )
-
-    # -----------------------------------------------
-    # NUKE COMMAND
-    # -----------------------------------------------
+            await ctx.send("Discord couldn't delete that channel.")
 
     @commands.command(
         name="nuke",
-        help="Recreate the current text channel after confirmation."
+        help="Recreate this channel after one-time DM code verification."
     )
+    @commands.guild_only()
     @commands.has_permissions(manage_channels=True)
     async def nuke(self, ctx):
         channel = ctx.channel
+        member = ctx.author
 
         if not isinstance(channel, discord.TextChannel):
+            return await ctx.send("Nuke can only be used in a text channel.")
+        if member.id in self.pending_nukes:
             return await ctx.send(
-                "Nuke can only be used in a text channel."
+                "You already have a nuke verification in progress. "
+                "Finish it or wait for it to expire."
             )
 
-        warning = (
-            f"**Recreate {channel.mention}?**\n\n"
-            "ONYX will create a replacement channel with the existing "
-            "channel settings and permissions, then delete the original.\n\n"
-            "**Important:** The original channel's messages will not "
-            "be copied to the replacement."
+        code = f"{secrets.randbelow(900000) + 100000}"
+
+        try:
+            await member.send(
+                f"**ONYX channel recreation verification**\n\n"
+                f"A request was made to recreate `#{channel.name}` in "
+                f"**{ctx.guild.name}**.\n\n"
+                f"Your one-time code is:\n```{code}```\n"
+                f"To continue, send this exact code as a message in "
+                f"{channel.mention} within **60 seconds**.\n\n"
+                "If you did not request this, ignore this DM. "
+                "No channel changes will occur."
+            )
+        except discord.Forbidden:
+            return await ctx.send(
+                f"{member.mention}, I couldn't DM you. Enable DMs from "
+                "server members and run `,nuke` again. Nothing was changed."
+            )
+        except discord.HTTPException:
+            return await ctx.send(
+                "I couldn't send the verification DM. Nothing was changed."
+            )
+
+        self.pending_nukes.add(member.id)
+        await ctx.send(
+            f"{member.mention}, I've sent you a one-time code by DM. "
+            "Send it in this channel within **60 seconds** to continue."
         )
 
-        view = ConfirmActionView(ctx.author.id)
-        message = await ctx.send(warning, view=view)
+        def check(message):
+            return (
+                message.author.id == member.id
+                and message.channel.id == channel.id
+                and message.guild is not None
+                and message.guild.id == ctx.guild.id
+                and message.content.strip() == code
+            )
 
-        await view.wait()
-
-        if not view.confirmed:
-            if not view.is_finished():
-                await message.edit(
-                    content="Confirmation expired. Nothing was changed.",
-                    view=None
+        verified = False
+        try:
+            await self.bot.wait_for("message", timeout=60.0, check=check)
+            verified = True
+        except TimeoutError:
+            try:
+                await ctx.send(
+                    f"{member.mention}, verification expired. "
+                    "The channel was not changed. Run `,nuke` to try again."
                 )
+            except discord.HTTPException:
+                pass
+        finally:
+            self.pending_nukes.discard(member.id)
+
+        if not verified:
+            return
+
+        current_member = ctx.guild.get_member(member.id)
+        if current_member is None or not current_member.guild_permissions.manage_channels:
+            try:
+                await ctx.send(
+                    "Verification passed, but your Manage Channels permission "
+                    "is no longer available. Nothing was changed."
+                )
+            except discord.HTTPException:
+                pass
             return
 
         try:
+            await ctx.send(
+                "Code verified. Recreating this channel now. "
+                "Messages from the old channel will not be copied."
+            )
             replacement = await channel.clone(
                 name=channel.name,
-                reason=f"Channel recreated by {ctx.author} using ONYX."
+                reason=f"Channel recreated by {member} after DM code verification."
             )
-
             await replacement.edit(
                 position=channel.position,
                 reason="Preserving channel position during recreation."
             )
-
             await channel.delete(
-                reason=f"Channel recreated by {ctx.author} using ONYX."
+                reason=f"Channel recreated by {member} after DM code verification."
             )
-
             await replacement.send(
-                f"This channel has been recreated by {ctx.author.mention}."
+                f"This channel has been recreated by {member.mention} "
+                "after successful DM verification. Previous messages "
+                "were not copied."
             )
-
         except discord.Forbidden:
-            await ctx.send(
-                "I don't have the permissions needed to recreate "
-                "this channel. The original may still exist."
-            )
+            try:
+                await ctx.send(
+                    "I don't have the permissions needed to recreate this "
+                    "channel. Check the channel list before trying again."
+                )
+            except discord.HTTPException:
+                pass
         except discord.HTTPException:
-            await ctx.send(
-                "Discord encountered an error while recreating "
-                "the channel. Check the channel list before trying again."
-            )
+            try:
+                await ctx.send(
+                    "Discord encountered an error while recreating this "
+                    "channel. Check the channel list before trying again."
+                )
+            except discord.HTTPException:
+                pass
 
 
 async def setup(bot):
