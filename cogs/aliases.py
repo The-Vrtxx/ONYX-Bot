@@ -2,9 +2,8 @@ import discord
 from discord.ext import commands
 
 
-# Alias -> existing registered command path.
-# Aliases point to the original command, preserving its checks,
-# permissions, cooldowns, and callback.
+# Canonical command path -> shortcuts.
+# main.py translates these shortcuts before discord.py processes the message.
 COMMAND_ALIASES = {
     # Core / utility
     "help": ["h", "cmds"],
@@ -65,9 +64,6 @@ COMMAND_ALIASES = {
 
     # Channels / server
     "channel": ["ch"],
-    "create": ["cnew"],
-    "create_channel": ["cadd"],
-    "delete_channel": ["cdel"],
     "nuke": ["nk"],
     "channelcount": ["cc"],
     "rolelist": ["rl"],
@@ -152,7 +148,7 @@ COMMAND_ALIASES = {
     "voicemaster_setup": ["vms"],
 
     # Last.fm
-    "lastfm": ["lfm", "fm"],
+    "lastfm": ["lfm"],
     "lastfm connect": ["lfmc"],
     "lastfm finish": ["lfmf"],
     "lastfm logout": ["lfmo"],
@@ -173,68 +169,10 @@ COMMAND_ALIASES = {
 
 
 class CommandAliases(commands.Cog):
-    """Registers short aliases for ONYX's existing prefix commands."""
+    """Displays the configured shortcuts. main.py handles their translation."""
 
     def __init__(self, bot):
         self.bot = bot
-        self.applied = False
-        self.applied_count = 0
-        self.skipped = []
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        # Commands from every extension are loaded in setup_hook before on_ready.
-        # Re-run safely after reconnects/reloads; do not duplicate aliases.
-        self.apply_aliases()
-
-    def apply_aliases(self):
-        self.applied_count = 0
-        self.skipped = []
-
-        for command_path, aliases in COMMAND_ALIASES.items():
-            command = self.bot.get_command(command_path)
-            if command is None:
-                self.skipped.append(f"{command_path} (command not found)")
-                continue
-
-            namespace = command.parent
-            registry = namespace.all_commands if namespace else self.bot.all_commands
-
-            for raw_alias in aliases:
-                alias = raw_alias.strip().lower()
-                if not alias or " " in alias:
-                    continue
-
-                existing = registry.get(alias)
-                if existing is not None:
-                    if existing is command:
-                        if alias not in command.aliases:
-                            command.aliases.append(alias)
-                        continue
-                    self.skipped.append(
-                        f"{command_path} -> {alias} (already registered)"
-                    )
-                    continue
-
-                # Critical: register the alias in discord.py's actual lookup
-                # mapping. Updating command.aliases alone does not do this.
-                registry[alias] = command
-                if alias not in command.aliases:
-                    command.aliases.append(alias)
-                self.applied_count += 1
-
-        self.applied = True
-
-        # Log a useful summary in Render logs.
-        import logging
-        logger = logging.getLogger("bot.aliases")
-        logger.info(
-            "Command aliases registered: %s | skipped: %s",
-            self.applied_count,
-            len(self.skipped)
-        )
-        if self.skipped:
-            logger.warning("Alias registration skipped: %s", "; ".join(self.skipped))
 
     @commands.command(
         name="aliases",
@@ -245,8 +183,7 @@ class CommandAliases(commands.Cog):
     async def aliases(self, ctx, *, search: str = None):
         rows = []
         for command_path, short_names in COMMAND_ALIASES.items():
-            command = self.bot.get_command(command_path)
-            if command is None:
+            if self.bot.get_command(command_path) is None:
                 continue
             if search and search.casefold() not in command_path.casefold() and not any(
                 search.casefold() in name.casefold() for name in short_names
