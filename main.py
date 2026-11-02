@@ -7,6 +7,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from database import Database
+from cogs.aliases import COMMAND_ALIASES
 
 load_dotenv()
 
@@ -131,12 +132,75 @@ async def on_ready():
     )
 
 
+def build_alias_lookup():
+    """Build shortcut -> real command path, ignoring missing/colliding entries."""
+    lookup = {}
+    skipped = []
+
+    for command_path, aliases in COMMAND_ALIASES.items():
+        for alias in aliases:
+            key = alias.strip().lower()
+            if not key or " " in key:
+                continue
+            if key in lookup:
+                skipped.append(f"{key} (duplicate alias)")
+                continue
+            lookup[key] = command_path
+
+    return lookup, skipped
+
+
+async def normalize_command_alias(bot, message):
+    """Translate a leading shortcut into its canonical prefix command."""
+    if message.author.bot:
+        return
+
+    prefixes = await get_prefix(bot, message)
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+
+    content = message.content
+    matched_prefix = next(
+        (
+            prefix for prefix in sorted(prefixes, key=len, reverse=True)
+            if content.startswith(prefix)
+        ),
+        None
+    )
+    if not matched_prefix:
+        return
+
+    command_text = content[len(matched_prefix):]
+    if not command_text:
+        return
+
+    first_token, separator, remainder = command_text.partition(" ")
+    lookup, _ = build_alias_lookup()
+    command_path = lookup.get(first_token.lower())
+    if command_path is None:
+        return
+
+    # Only translate aliases whose target command actually exists.
+    target = bot.get_command(command_path)
+    if target is None:
+        return
+
+    translated = command_path.replace("_", " ")
+    new_command_text = translated + (separator + remainder if separator else "")
+    message.content = matched_prefix + new_command_text
+    log.info(
+        "Translated command alias: %r -> %r",
+        content,
+        message.content
+    )
+
+
 async def normalize_spaced_command(bot, message):
     """
-    Convert commands containing spaces into their registered underscore
-    command names. Arguments are preserved.
+    Convert canonical commands containing underscores to their spaced form
+    while preserving arguments.
     """
-    if message.guild is None or message.author.bot:
+    if message.author.bot:
         return
 
     prefixes = await get_prefix(bot, message)
@@ -172,11 +236,10 @@ async def normalize_spaced_command(bot, message):
     for phrase, registered_name in candidates:
         if lowered == phrase or lowered.startswith(phrase + " "):
             remainder = command_text[len(phrase):]
-            original_content = message.content
             message.content = matched_prefix + registered_name + remainder
             log.info(
                 "Normalized command: %r -> %r",
-                original_content,
+                content,
                 message.content
             )
             return
@@ -186,6 +249,7 @@ async def normalize_spaced_command(bot, message):
 async def on_message(message):
     if message.author.bot:
         return
+    await normalize_command_alias(bot, message)
     await normalize_spaced_command(bot, message)
     await bot.process_commands(message)
 
@@ -296,7 +360,6 @@ async def reload_cogs(ctx, *, cog: str = None):
 
 
 # HELP IS BUILT FROM THE LIVE COMMAND REGISTRY.
-# This means newly added commands and cogs automatically appear after loading.
 COG_LABELS = {
     "automod": "AutoMod",
     "channel_manager": "Channel Management",
@@ -357,28 +420,25 @@ def _help_embed(prefix, category=None, page=0):
 
     if category is None:
         total_commands = sum(len(items) for items in categories.values())
-        lines = [
+        embed.description = "\n".join([
             "Welcome to the ONYX help menu.",
             "",
             "Choose a category below to browse its commands.",
             f"**{len(categories)} categories • {total_commands} commands**",
             "",
             f"Use `{prefix}help <command>` for details about a command."
-        ]
-        embed.description = "\n".join(lines)
+        ])
     else:
         items = categories.get(category, [])
         total_pages = max(1, (len(items) + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
         page = max(0, min(page, total_pages - 1))
         page_items = items[page * COMMANDS_PER_PAGE:(page + 1) * COMMANDS_PER_PAGE]
-
         lines = []
         for command in page_items:
             description = command.help or command.brief or "No description available."
             lines.append(
                 f"`{_command_usage(prefix, command)}`\n{description[:180]}"
             )
-
         embed.description = (
             "\n\n".join(lines)
             + f"\n\n`{prefix}help <command>` for more details"
@@ -401,7 +461,6 @@ class HelpCategorySelect(discord.ui.Select):
             )
             for name, items in categories.items()
         ][:25]
-
         super().__init__(
             placeholder="Select a command category...",
             min_values=1,
@@ -431,10 +490,8 @@ class OnyxHelpView(discord.ui.View):
         self.author_id = author_id
         self.category = None
         self.page = 0
-
         self.category_select = HelpCategorySelect(self)
         self.add_item(self.category_select)
-
         self.previous_button = discord.ui.Button(
             label="Previous",
             style=discord.ButtonStyle.secondary,
@@ -453,8 +510,7 @@ class OnyxHelpView(discord.ui.View):
         self._pagination_added = False
 
     def _page_count(self):
-        categories = get_help_categories()
-        count = len(categories.get(self.category, []))
+        count = len(get_help_categories().get(self.category, []))
         return max(1, (count + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
 
     def refresh_pagination_controls(self):
@@ -467,7 +523,6 @@ class OnyxHelpView(discord.ui.View):
             self.remove_item(self.previous_button)
             self.remove_item(self.next_button)
             self._pagination_added = False
-
         if self._pagination_added:
             self.previous_button.disabled = self.page <= 0
             self.next_button.disabled = self.page >= total_pages - 1
@@ -477,7 +532,6 @@ class OnyxHelpView(discord.ui.View):
         new_page = self.page + direction
         if not 0 <= new_page < total_pages:
             return await interaction.response.defer()
-
         self.page = new_page
         self.refresh_pagination_controls()
         await interaction.response.edit_message(
@@ -508,7 +562,6 @@ class OnyxHelpView(discord.ui.View):
 
 async def _send_help(ctx, command_query=None):
     prefix = ctx.prefix
-
     if command_query:
         query = command_query.strip().lower()
         command = bot.get_command(query.replace(" ", "_"))
@@ -518,7 +571,6 @@ async def _send_help(ctx, command_query=None):
             return await ctx.send(
                 f"I couldn't find `{command_query}`. Use `{prefix}help` to browse commands."
             )
-
         embed = discord.Embed(
             title=f"ONYX • {command.qualified_name}",
             description=(
