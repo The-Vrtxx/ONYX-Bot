@@ -220,11 +220,12 @@ class AntiNuke(commands.Cog):
                 if not guild.me.guild_permissions.kick_members: return "failed: missing Kick Members permission"
                 await actor.kick(reason=reason)
             elif choice == "jail":
-                role_id = cfg["jail_role_id"]
-                role = guild.get_role(int(role_id)) if role_id else None
-                if not role: return "failed: jail role is not configured"
-                if role >= guild.me.top_role or role.managed: return "failed: jail role is above ONYX or managed"
-                await actor.add_roles(role, reason=reason)
+                jail_cog = self.bot.get_cog("Jail")
+                if not jail_cog:
+                    return "failed: ONYX jail module is not loaded"
+                ok, message = await jail_cog.jail_member(guild, actor, self.bot.user, reason)
+                if not ok:
+                    return f"failed: {message}"
             elif choice == "strip":
                 rows = await self.bot.db.fetchall("SELECT role_id FROM onyx_antinuke_staff_roles WHERE guild_id=?", (guild.id,))
                 role_ids = {int(r["role_id"]) for r in rows}
