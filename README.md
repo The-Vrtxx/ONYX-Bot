@@ -27,10 +27,11 @@ Configuration
 
 Set these environment variables:
 
-Variable	Purpose
-DISCORD_TOKEN	Discord bot token
-BOT_OWNER_ID	Numeric Discord user ID for the bot owner
-DATABASE_URL	PostgreSQL connection string; omit for local SQLite
+Variable | Purpose
+---|---
+DISCORD_TOKEN | Discord bot token
+BOT_OWNER_ID | Numeric Discord user ID for the bot owner
+DATABASE_URL | PostgreSQL connection string; omit for local SQLite
 
 Never commit your bot token, database credentials, or other secrets to GitHub.
 
@@ -92,6 +93,14 @@ Roles and Command Help
 - Added trusted-user whitelist management.
 - Added configurable jail and staff roles.
 - Added security event logging and protection status commands.
+
+### Jail System
+
+- Added `,setup jail` to create the jail role, private jail category, and private jail channel.
+- The jail channel is visible to jailed members and existing server staff roles detected through their Discord permissions; staff roles are not created by ONYX.
+- Added manual jail and release commands, temporary jail durations, automatic release after the configured duration, and persistent jail records.
+- Added commands to list jailed members, view a member's jail information, and cancel a scheduled release.
+- Added role restoration when a member is released from jail.
 
 Reporting Issues
 
