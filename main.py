@@ -154,7 +154,6 @@ async def normalize_spaced_command(bot, message):
         if spaced != qualified:
             candidates.append((spaced, qualified))
 
-    # Check the longest command names first.
     candidates.sort(
         key=lambda item: len(item[0]),
         reverse=True
@@ -165,7 +164,6 @@ async def normalize_spaced_command(bot, message):
     for phrase, registered_name in candidates:
         if lowered == phrase or lowered.startswith(phrase + " "):
             remainder = command_text[len(phrase):]
-
             original_content = message.content
 
             message.content = (
@@ -179,7 +177,6 @@ async def normalize_spaced_command(bot, message):
                 original_content,
                 message.content
             )
-
             return
 
 
@@ -188,10 +185,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Normalize spaced commands before Discord.py processes them.
     await normalize_spaced_command(bot, message)
-
-    # Process prefix commands.
     await bot.process_commands(message)
 
 
@@ -273,16 +267,10 @@ async def reload_cogs(ctx, *, cog: str = None):
             else:
                 await bot.load_extension(extension)
 
-            return await ctx.send(
-                f"Reloaded `{cog}` successfully."
-            )
+            return await ctx.send(f"Reloaded `{cog}` successfully.")
 
         except Exception as exc:
-            log.exception(
-                "Failed to reload extension %s",
-                extension
-            )
-
+            log.exception("Failed to reload extension %s", extension)
             return await ctx.send(
                 f"Couldn't reload `{cog}`: "
                 f"`{type(exc).__name__}: {exc}`"
@@ -299,22 +287,13 @@ async def reload_cogs(ctx, *, cog: str = None):
                 await bot.reload_extension(extension)
             else:
                 await bot.load_extension(extension)
-
             succeeded.append(name)
 
         except Exception as exc:
-            log.exception(
-                "Failed to reload extension %s",
-                extension
-            )
+            log.exception("Failed to reload extension %s", extension)
+            failed.append(f"{name}: {type(exc).__name__}: {exc}")
 
-            failed.append(
-                f"{name}: {type(exc).__name__}: {exc}"
-            )
-
-    summary = (
-        f"Reload complete. **{len(succeeded)}** loaded/reloaded."
-    )
+    summary = f"Reload complete. **{len(succeeded)}** loaded/reloaded."
 
     if succeeded:
         summary += "\n**Successful:** " + ", ".join(
@@ -343,25 +322,22 @@ HELP_CATEGORIES = {
         ("unlock", ",unlock", "Unlock the current text channel."),
         ("slowmode", ",slowmode <seconds>", "Set channel slowmode."),
     ],
-
     "AutoMod": [
         ("automod", ",automod <enabled> [block_invites] [block_links] [spam_limit]", "Configure automatic moderation."),
         ("automod_ignore", ",automod ignore #channel", "Ignore a channel in AutoMod."),
     ],
-
     "Logging": [
-    ("logging_set", ",logging set #channel", "Set the server's logging destination."),
-    ("logging_remove", ",logging remove [#channel]", "Remove the configured logging destination."),
-    ("logging_list", ",logging list", "Show the current logging destination."),
-    ("logging_test", ",logging test", "Send a test log."),
+        ("logging_set", ",logging set #channel", "Set the server's logging destination."),
+        ("logging_remove", ",logging remove [#channel]", "Remove the configured logging destination."),
+        ("logging_list", ",logging list", "Show the current logging destination."),
+        ("logging_test", ",logging test", "Send a test log."),
     ],
-
     "Channel Management": [
         ("channel", ",channel", "Show channel management commands."),
         ("channel create", ",channel create <name>", "Create a text channel."),
         ("channel delete", ",channel delete #channel", "Delete a text channel after confirmation."),
         ("nuke", ",nuke", "Recreate the current channel while preserving its settings."),
-   ],
+    ],
     "Utility": [
         ("ping", ",ping", "Check ONYX latency."),
         ("userinfo", ",userinfo [@member]", "Show member information."),
@@ -369,12 +345,10 @@ HELP_CATEGORIES = {
         ("avatar", ",avatar [@member]", "Display a member's avatar."),
         ("botinfo", ",botinfo", "Show ONYX uptime and statistics."),
     ],
-
     "Welcome": [
         ("welcome_set", ",welcome set #channel message...", "Configure welcome messages."),
         ("goodbye_set", ",goodbye set message...", "Configure goodbye messages."),
     ],
-
     "Roles": [
         ("selfrole_add", ",selfrole add @role", "Add a self-assignable role."),
         ("selfrole_remove", ",selfrole remove @role", "Remove a self-assignable role."),
@@ -382,13 +356,11 @@ HELP_CATEGORIES = {
         ("role", ",role @role", "Toggle a self-assignable role."),
         ("rolepanel_create", ",rolepanel create", "Create a persistent role panel."),
     ],
-
     "Levels": [
         ("rank", ",rank [@member]", "View a member's level and XP."),
         ("leaderboard", ",leaderboard", "Show the server XP leaderboard."),
         ("levels_settings", ",levels settings <enabled> [#channel]", "Configure XP and level-up settings."),
     ],
-
     "Custom Commands & Embeds": [
         ("embed", ",embed <title> <description>", "Create and send a custom embed."),
         ("custom_add", ",custom add <name> <response>", "Create a custom text command."),
@@ -398,41 +370,54 @@ HELP_CATEGORIES = {
         ("embed_template_send", ",embed template send <name>", "Send a saved embed template."),
         ("embed_template_delete", ",embed template delete <name>", "Delete a saved embed template."),
     ],
-
     "Last.fm": [
         ("lastfm link", ",lastfm link <username>", "Link your Last.fm account."),
         ("lastfm nowplaying", ",lastfm nowplaying", "Show your current or latest track."),
         ("lastfm unlink", ",lastfm unlink", "Unlink your Last.fm account."),
     ],
-
     "Prefix": [
         ("prefix show", ",prefix show", "Show this server's prefix."),
         ("prefix set", ",prefix set <new_prefix>", "Change this server's prefix (Manage Server)."),
         ("prefix reset", ",prefix reset", "Reset this server's prefix to a comma (Manage Server)."),
     ],
-
     "Server Setup": [
         ("setup", ",setup", "Show the server setup checklist."),
         ("settings", ",settings", "View this server's ONYX settings."),
         ("serverdata", ",serverdata", "Explain the server data ONYX stores."),
         ("reload", ",reload [cog]", "Reload one cog or all cogs (bot owner only)."),
     ],
-
-    Moderation:
-  ("modnote", ",modnote @member <note>", "Save a staff-only note.")
-  ("modnotes", ",modnotes @member", "View staff-only notes.")
-  ("nick", ",nick @member <nickname>", "Change a member nickname.")
-  ("role_add", ",role_add @member @role", "Give a member a role.")
-  ("role_remove", ",role_remove @member @role", "Remove a member role.")
-Security:
-  ("security_set", ",security_set #channel", "Set security alert destination.")
-  ("security_off", ",security_off", "Disable security alerts.")
-Server Tools:
-  ("channelcount", ",channelcount", "Show channel counts.")
-  ("rolelist", ",rolelist", "List server roles.")
-  ("emoji_list", ",emoji_list", "List custom server emojis.")
-  ("permissions", ",permissions [@member]", "Show key permissions.")
-
+    "Moderation Extras": [
+        ("modnote", ",modnote @member <note>", "Save a staff-only note."),
+        ("modnotes", ",modnotes @member", "View staff-only notes."),
+        ("nick", ",nick @member <nickname>", "Change a member nickname."),
+        ("role_add", ",role_add @member @role", "Give a member a role."),
+        ("role_remove", ",role_remove @member @role", "Remove a member role."),
+    ],
+    "Security": [
+        ("security_set", ",security_set #channel", "Set security alert destination."),
+        ("security_off", ",security_off", "Disable security alerts."),
+    ],
+    "Server Tools": [
+        ("channelcount", ",channelcount", "Show channel counts."),
+        ("rolelist", ",rolelist", "List server roles."),
+        ("emoji_list", ",emoji_list", "List custom server emojis."),
+        ("permissions", ",permissions [@member]", "Show key permissions."),
+    ],
+    "Engagement": [
+        ("poll", ",poll <question>", "Create a community poll."),
+        ("autoresponse_add", ",autoresponse_add <trigger> <response>", "Add an automatic response."),
+        ("autoresponse_remove", ",autoresponse_remove <trigger>", "Remove an automatic response."),
+        ("autoresponse_list", ",autoresponse_list", "List automatic responses."),
+    ],
+    "Tickets": [
+        ("ticket_setup", ",ticket_setup", "Create a support ticket panel."),
+    ],
+    "Voice Master": [
+        ("voicemaster_set", ",voicemaster_set <channel>", "Set the voice room creation channel."),
+        ("voicemaster_remove", ",voicemaster_remove", "Remove the voice room creation channel."),
+        ("voicemaster_name", ",voicemaster_name <name>", "Rename your temporary voice room."),
+        ("voicemaster_limit", ",voicemaster_limit <number>", "Set your temporary voice room user limit."),
+    ],
     "Special Role": [
         ("shh", ",shh @member", "Toggle the configured special role on or off."),
         ("shh_whitelist_add", ",shh whitelist add @member", "Allow a member to use shh (bot owner only)."),
@@ -452,37 +437,29 @@ def _help_embed(prefix, category=None, command=None):
         ),
         color=discord.Color.from_rgb(25, 27, 32)
     )
-
-    embed.set_footer(
-        text="ONYX • Modular Discord Management"
-    )
+    embed.set_footer(text="ONYX • Modular Discord Management")
 
     if category is None:
         overview = "\n".join(
             f"**{name}** · {len(items)} commands"
             for name, items in HELP_CATEGORIES.items()
         )
-
         embed.add_field(
             name="Command Categories",
             value=overview,
             inline=False
         )
-
         embed.add_field(
             name="Quick start",
             value=f"`{prefix}ping`  ·  `{prefix}rank`  ·  `{prefix}help`",
             inline=False
         )
-
     else:
         items = HELP_CATEGORIES[category]
-
         listing = "\n".join(
             f"`{prefix}{usage[1:] if usage.startswith(',') else usage}`"
             for _, usage, _ in items
         )
-
         embed.add_field(
             name=f"{category} Commands",
             value=listing[:1024] or "No commands listed.",
@@ -494,17 +471,12 @@ def _help_embed(prefix, category=None, command=None):
                 (item for item in items if item[0] == command),
                 None
             )
-
             if match:
                 usage = match[1]
                 usage = usage[1:] if usage.startswith(",") else usage
-
                 embed.add_field(
                     name=match[0],
-                    value=(
-                        f"**Usage:** `{prefix}{usage}`\n"
-                        f"{match[2]}"
-                    ),
+                    value=f"**Usage:** `{prefix}{usage}`\n{match[2]}",
                     inline=False
                 )
 
@@ -514,7 +486,6 @@ def _help_embed(prefix, category=None, command=None):
 class HelpCategorySelect(discord.ui.Select):
     def __init__(self, view):
         self.help_view = view
-
         options = [
             discord.SelectOption(
                 label=name,
@@ -523,7 +494,6 @@ class HelpCategorySelect(discord.ui.Select):
             )
             for name, items in HELP_CATEGORIES.items()
         ]
-
         super().__init__(
             placeholder="Choose a command category…",
             min_values=1,
@@ -536,7 +506,6 @@ class HelpCategorySelect(discord.ui.Select):
         self.help_view.category = self.values[0]
         self.help_view.command = None
         self.help_view.refresh_command_select()
-
         await interaction.response.edit_message(
             embed=_help_embed(
                 self.help_view.prefix,
@@ -549,7 +518,6 @@ class HelpCategorySelect(discord.ui.Select):
 class HelpCommandSelect(discord.ui.Select):
     def __init__(self, view):
         self.help_view = view
-
         super().__init__(
             placeholder="Choose a command for details…",
             min_values=1,
@@ -566,7 +534,6 @@ class HelpCommandSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         self.help_view.command = self.values[0]
-
         await interaction.response.edit_message(
             embed=_help_embed(
                 self.help_view.prefix,
@@ -580,21 +547,17 @@ class HelpCommandSelect(discord.ui.Select):
 class OnyxHelpView(discord.ui.View):
     def __init__(self, prefix, author_id):
         super().__init__(timeout=180)
-
         self.prefix = prefix
         self.author_id = author_id
         self.category = None
         self.command = None
-
         self.category_select = HelpCategorySelect(self)
         self.command_select = HelpCommandSelect(self)
-
         self.add_item(self.category_select)
         self.add_item(self.command_select)
 
     def refresh_command_select(self):
         items = HELP_CATEGORIES.get(self.category, [])
-
         self.command_select.options = [
             discord.SelectOption(
                 label=name[:100],
@@ -603,14 +566,9 @@ class OnyxHelpView(discord.ui.View):
             )
             for name, _, description in items
         ] or [
-            discord.SelectOption(
-                label="No commands",
-                value="_none"
-            )
+            discord.SelectOption(label="No commands", value="_none")
         ]
-
         self.command_select.disabled = not bool(items)
-
         self.command_select.placeholder = (
             f"Choose from {self.category}…"
             if self.category
@@ -625,7 +583,6 @@ class OnyxHelpView(discord.ui.View):
                 ephemeral=True
             )
             return False
-
         return True
 
     async def on_timeout(self):
@@ -636,11 +593,7 @@ class OnyxHelpView(discord.ui.View):
 async def _send_help(ctx):
     prefix = ctx.prefix
     view = OnyxHelpView(prefix, ctx.author.id)
-
-    await ctx.send(
-        embed=_help_embed(prefix),
-        view=view
-    )
+    await ctx.send(embed=_help_embed(prefix), view=view)
 
 
 @bot.command(name="help")
@@ -654,5 +607,4 @@ if __name__ == "__main__":
             "DISCORD_TOKEN is missing. "
             "Add it to your environment or .env file."
         )
-
     bot.run(TOKEN)
