@@ -356,6 +356,12 @@ HELP_CATEGORIES = {
     ("logging_test", ",logging test", "Send a test log."),
     ],
 
+    "Channel Management": [
+        ("channel", ",channel", "Show channel management commands."),
+        ("channel create", ",channel create <name>", "Create a text channel."),
+        ("channel delete", ",channel delete #channel", "Delete a text channel after confirmation."),
+        ("nuke", ",nuke", "Recreate the current channel while preserving its settings."),
+   ],
     "Utility": [
         ("ping", ",ping", "Check ONYX latency."),
         ("userinfo", ",userinfo [@member]", "Show member information."),
