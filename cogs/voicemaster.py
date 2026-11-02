@@ -5,18 +5,17 @@ from discord.ext import commands
 
 
 TEAL = 0x35D6D0
-PANEL_TITLE = "Control Your Voice Chat"
 PANEL_DESCRIPTION = (
-    "Manage your temporary voice channel with the buttons below.\n\n"
-    "**👥 LIMIT** — Change the user limit\n"
-    "**🔒 PRIVACY** — Lock or unlock the room\n"
-    "**⛓️ NAME** — Rename your voice channel\n"
-    "**👑 CLAIM** — Claim an unowned room\n"
-    "**📞 INVITE** — Allow a member into your room\n"
-    "**📞 KICK** — Disconnect a member\n"
-    "**🚫 BLOCK** — Prevent a member from joining\n"
-    "**🔓 UNBLOCK** — Restore a member's access\n\n"
-    "*Press a button below to manage your Voice Chat.*"
+    "Click a button below to manage your temporary voice channel.\n\n"
+    "🔒 **Lock** — Restrict who can join\n"
+    "🔓 **Unlock** — Allow members to join\n"
+    "👁️ **Ghost** — Hide your channel\n"
+    "👁️ **Reveal** — Show your channel\n"
+    "🎙️ **Claim** — Claim an unowned channel\n"
+    "🔨 **Disconnect** — Remove a member\n"
+    "📝 **View** — View channel information\n"
+    "➕ **Increase** — Raise the user limit\n"
+    "➖ **Decrease** — Lower the user limit"
 )
 
 
@@ -29,30 +28,16 @@ def parse_member_id(value: str):
     return None
 
 
-class VoiceModal(discord.ui.Modal):
-    def __init__(self, cog, action):
-        super().__init__(title={
-            "limit": "Change Room Limit",
-            "name": "Rename Voice Channel",
-            "invite": "Invite a Member",
-            "kick": "Disconnect a Member",
-            "block": "Block a Member",
-            "unblock": "Unblock a Member",
-        }[action])
+class DisconnectModal(discord.ui.Modal, title="Disconnect a Member"):
+    member_value = discord.ui.TextInput(
+        label="Member mention or user ID",
+        placeholder="@member or numeric user ID",
+        max_length=25
+    )
+
+    def __init__(self, cog):
+        super().__init__()
         self.cog = cog
-        self.action = action
-        label, placeholder, max_length = {
-            "limit": ("User limit (0–99)", "0 means unlimited", 2),
-            "name": ("New channel name", "My voice room", 90),
-            "invite": ("Member mention or user ID", "@member or numeric ID", 25),
-            "kick": ("Member mention or user ID", "@member or numeric ID", 25),
-            "block": ("Member mention or user ID", "@member or numeric ID", 25),
-            "unblock": ("Member mention or user ID", "@member or numeric ID", 25),
-        }[action]
-        self.value = discord.ui.TextInput(
-            label=label, placeholder=placeholder, max_length=max_length
-        )
-        self.add_item(self.value)
 
     async def on_submit(self, interaction: discord.Interaction):
         room = self.cog.member_room(interaction.user)
@@ -65,83 +50,44 @@ class VoiceModal(discord.ui.Modal):
                 "Only the room owner can use this control.", ephemeral=True
             )
 
-        value = str(self.value.value).strip()
+        member_id = parse_member_id(str(self.member_value.value))
+        if member_id is None:
+            return await interaction.response.send_message(
+                "Enter a valid member mention or numeric user ID.", ephemeral=True
+            )
+
+        member = interaction.guild.get_member(member_id)
+        if member is None:
+            try:
+                member = await interaction.guild.fetch_member(member_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                member = None
+
+        if member is None or member.bot:
+            return await interaction.response.send_message(
+                "I couldn't find that server member.", ephemeral=True
+            )
+        if member.id == interaction.user.id:
+            return await interaction.response.send_message(
+                "You can't disconnect yourself with this control.", ephemeral=True
+            )
+        if not member.voice or not member.voice.channel or member.voice.channel.id != room.id:
+            return await interaction.response.send_message(
+                "That member isn't in your voice channel.", ephemeral=True
+            )
+
         try:
-            if self.action == "limit":
-                limit = int(value)
-                if not 0 <= limit <= 99:
-                    raise ValueError
-                await room.edit(user_limit=limit)
-                result = f"Room limit set to **{limit or 'unlimited'}**."
-            elif self.action == "name":
-                await room.edit(name=value[:90])
-                result = f"Room renamed to **{value[:90]}**."
-            else:
-                user_id = parse_member_id(value)
-                if user_id is None:
-                    return await interaction.response.send_message(
-                        "Enter a valid member mention or numeric user ID.",
-                        ephemeral=True
-                    )
-                member = interaction.guild.get_member(user_id)
-                if member is None:
-                    try:
-                        member = await interaction.guild.fetch_member(user_id)
-                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                        member = None
-                if member is None or member.bot:
-                    return await interaction.response.send_message(
-                        "I couldn't find that server member.", ephemeral=True
-                    )
-                if member.id == interaction.user.id:
-                    return await interaction.response.send_message(
-                        "You can't use this action on yourself.", ephemeral=True
-                    )
-
-                overwrite = room.overwrites_for(member)
-                if self.action == "invite":
-                    overwrite.view_channel = True
-                    overwrite.connect = True
-                    await room.set_permissions(
-                        member, overwrite=overwrite, reason="Invited through ONYX VoiceMaster"
-                    )
-                    result = f"{member.mention} can now view and join your room."
-                elif self.action == "kick":
-                    if member.voice and member.voice.channel and member.voice.channel.id == room.id:
-                        await member.move_to(None, reason="Disconnected through ONYX VoiceMaster")
-                        result = f"Disconnected {member.mention}."
-                    else:
-                        result = f"{member.mention} is not in your room."
-                elif self.action == "block":
-                    overwrite.view_channel = False
-                    overwrite.connect = False
-                    await room.set_permissions(
-                        member, overwrite=overwrite, reason="Blocked through ONYX VoiceMaster"
-                    )
-                    if member.voice and member.voice.channel and member.voice.channel.id == room.id:
-                        await member.move_to(None, reason="Blocked through ONYX VoiceMaster")
-                    result = f"{member.mention} is blocked from your room."
-                else:
-                    await room.set_permissions(
-                        member, overwrite=None, reason="Unblocked through ONYX VoiceMaster"
-                    )
-                    result = f"{member.mention}'s room-specific restriction was removed."
-
-            await interaction.response.send_message(result, ephemeral=True)
-        except ValueError:
+            await member.move_to(None, reason="Disconnected through ONYX VoiceMaster")
             await interaction.response.send_message(
-                "Enter a whole number from 0 to 99. Use 0 for unlimited.",
-                ephemeral=True
+                f"Disconnected {member.mention}.", ephemeral=True
             )
         except discord.Forbidden:
             await interaction.response.send_message(
-                "I don't have permission to manage that voice channel or member.",
-                ephemeral=True
+                "I need Move Members permission to disconnect that member.", ephemeral=True
             )
         except discord.HTTPException:
             await interaction.response.send_message(
-                "Discord couldn't complete that action. Please try again.",
-                ephemeral=True
+                "Discord couldn't complete that action. Please try again.", ephemeral=True
             )
 
 
@@ -150,50 +96,99 @@ class VoiceMasterPanel(discord.ui.View):
         super().__init__(timeout=None)
         self.cog = cog
 
-    async def open_modal(self, interaction, action):
-        await interaction.response.send_modal(VoiceModal(self.cog, action))
-
-    @discord.ui.button(label="Limit", emoji="👥", style=discord.ButtonStyle.secondary,
-                       custom_id="onyx_vm:limit", row=0)
-    async def limit(self, interaction, button):
-        await self.open_modal(interaction, "limit")
-
-    @discord.ui.button(label="Privacy", emoji="🔒", style=discord.ButtonStyle.secondary,
-                       custom_id="onyx_vm:privacy", row=0)
-    async def privacy(self, interaction, button):
+    async def get_control_room(self, interaction):
         room = self.cog.member_room(interaction.user)
         if room is None:
-            return await interaction.response.send_message(
+            await interaction.response.send_message(
                 "Join a temporary ONYX voice room first.", ephemeral=True
             )
+            return None
         if not await self.cog.can_control(interaction, room):
-            return await interaction.response.send_message(
-                "Only the room owner can change room privacy.", ephemeral=True
-            )
-        everyone = interaction.guild.default_role
-        overwrite = room.overwrites_for(everyone)
-        is_locked = overwrite.connect is False
-        overwrite.view_channel = True
-        overwrite.connect = True if is_locked else False
-        try:
-            await room.set_permissions(everyone, overwrite=overwrite)
             await interaction.response.send_message(
-                "Your room is now **unlocked**." if is_locked else "Your room is now **locked**.",
-                ephemeral=True
+                "Only the room owner can use these controls.", ephemeral=True
             )
+            return None
+        return room
+
+    @discord.ui.button(label="Lock", emoji="🔒", style=discord.ButtonStyle.secondary,
+                       custom_id="onyx_vm:lock", row=0)
+    async def lock(self, interaction: discord.Interaction, button: discord.ui.Button):
+        room = await self.get_control_room(interaction)
+        if room is None:
+            return
+        overwrite = room.overwrites_for(interaction.guild.default_role)
+        overwrite.connect = False
+        try:
+            await room.set_permissions(
+                interaction.guild.default_role, overwrite=overwrite,
+                reason="Locked through ONYX VoiceMaster"
+            )
+            await interaction.response.send_message("Your voice channel is **locked**.", ephemeral=True)
         except discord.Forbidden:
             await interaction.response.send_message(
-                "I need Manage Channels permission to change room privacy.", ephemeral=True
+                "I need Manage Channels permission to lock the room.", ephemeral=True
             )
 
-    @discord.ui.button(label="Name", emoji="✏️", style=discord.ButtonStyle.secondary,
-                       custom_id="onyx_vm:name", row=0)
-    async def name(self, interaction, button):
-        await self.open_modal(interaction, "name")
+    @discord.ui.button(label="Unlock", emoji="🔓", style=discord.ButtonStyle.secondary,
+                       custom_id="onyx_vm:unlock", row=0)
+    async def unlock(self, interaction: discord.Interaction, button: discord.ui.Button):
+        room = await self.get_control_room(interaction)
+        if room is None:
+            return
+        overwrite = room.overwrites_for(interaction.guild.default_role)
+        overwrite.connect = None
+        try:
+            await room.set_permissions(
+                interaction.guild.default_role, overwrite=overwrite,
+                reason="Unlocked through ONYX VoiceMaster"
+            )
+            await interaction.response.send_message("Your voice channel is **unlocked**.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I need Manage Channels permission to unlock the room.", ephemeral=True
+            )
 
-    @discord.ui.button(label="Claim", emoji="👑", style=discord.ButtonStyle.secondary,
+    @discord.ui.button(label="Ghost", emoji="👁️", style=discord.ButtonStyle.secondary,
+                       custom_id="onyx_vm:ghost", row=0)
+    async def ghost(self, interaction: discord.Interaction, button: discord.ui.Button):
+        room = await self.get_control_room(interaction)
+        if room is None:
+            return
+        overwrite = room.overwrites_for(interaction.guild.default_role)
+        overwrite.view_channel = False
+        try:
+            await room.set_permissions(
+                interaction.guild.default_role, overwrite=overwrite,
+                reason="Hidden through ONYX VoiceMaster"
+            )
+            await interaction.response.send_message("Your voice channel is now **hidden**.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I need Manage Channels permission to hide the room.", ephemeral=True
+            )
+
+    @discord.ui.button(label="Reveal", emoji="👁️", style=discord.ButtonStyle.secondary,
+                       custom_id="onyx_vm:reveal", row=0)
+    async def reveal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        room = await self.get_control_room(interaction)
+        if room is None:
+            return
+        overwrite = room.overwrites_for(interaction.guild.default_role)
+        overwrite.view_channel = None
+        try:
+            await room.set_permissions(
+                interaction.guild.default_role, overwrite=overwrite,
+                reason="Revealed through ONYX VoiceMaster"
+            )
+            await interaction.response.send_message("Your voice channel is **visible** again.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I need Manage Channels permission to reveal the room.", ephemeral=True
+            )
+
+    @discord.ui.button(label="Claim", emoji="🎙️", style=discord.ButtonStyle.secondary,
                        custom_id="onyx_vm:claim", row=0)
-    async def claim(self, interaction, button):
+    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
         room = self.cog.member_room(interaction.user)
         if room is None:
             return await interaction.response.send_message(
@@ -215,28 +210,79 @@ class VoiceMasterPanel(discord.ui.View):
             (interaction.user.id, room.id)
         )
         await interaction.response.send_message(
-            "You are now the owner of this voice room.", ephemeral=True
+            "You are now the owner of this voice channel.", ephemeral=True
         )
 
-    @discord.ui.button(label="Invite", emoji="📞", style=discord.ButtonStyle.secondary,
-                       custom_id="onyx_vm:invite", row=0)
-    async def invite(self, interaction, button):
-        await self.open_modal(interaction, "invite")
+    @discord.ui.button(label="Disconnect", emoji="🔨", style=discord.ButtonStyle.secondary,
+                       custom_id="onyx_vm:disconnect", row=1)
+    async def disconnect(self, interaction: discord.Interaction, button: discord.ui.Button):
+        room = await self.get_control_room(interaction)
+        if room is None:
+            return
+        await interaction.response.send_modal(DisconnectModal(self.cog))
 
-    @discord.ui.button(label="Kick", emoji="📵", style=discord.ButtonStyle.secondary,
-                       custom_id="onyx_vm:kick", row=1)
-    async def kick(self, interaction, button):
-        await self.open_modal(interaction, "kick")
+    @discord.ui.button(label="View", emoji="📝", style=discord.ButtonStyle.secondary,
+                       custom_id="onyx_vm:view", row=1)
+    async def view(self, interaction: discord.Interaction, button: discord.ui.Button):
+        room = await self.get_control_room(interaction)
+        if room is None:
+            return
+        owner_id = self.cog.owners.get(room.id)
+        owner = interaction.guild.get_member(owner_id) if owner_id else None
+        limit = f"{room.user_limit} users" if room.user_limit else "Unlimited"
+        privacy = room.overwrites_for(interaction.guild.default_role)
+        lock_state = "Locked" if privacy.connect is False else "Unlocked"
+        visibility = "Hidden" if privacy.view_channel is False else "Visible"
+        member_list = ", ".join(member.display_name for member in room.members) or "No members"
+        embed = discord.Embed(title=room.name, color=TEAL)
+        embed.add_field(name="Owner", value=owner.mention if owner else "Unclaimed", inline=True)
+        embed.add_field(name="User Limit", value=limit, inline=True)
+        embed.add_field(name="Privacy", value=lock_state, inline=True)
+        embed.add_field(name="Visibility", value=visibility, inline=True)
+        embed.add_field(name=f"Members ({len(room.members)})", value=member_list[:1024], inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="Block", emoji="🚫", style=discord.ButtonStyle.secondary,
-                       custom_id="onyx_vm:block", row=1)
-    async def block(self, interaction, button):
-        await self.open_modal(interaction, "block")
+    @discord.ui.button(label="Increase", emoji="➕", style=discord.ButtonStyle.secondary,
+                       custom_id="onyx_vm:increase", row=1)
+    async def increase(self, interaction: discord.Interaction, button: discord.ui.Button):
+        room = await self.get_control_room(interaction)
+        if room is None:
+            return
+        if room.user_limit >= 99:
+            return await interaction.response.send_message(
+                "The maximum room limit is 99.", ephemeral=True
+            )
+        new_limit = min(99, room.user_limit + 1) if room.user_limit else 2
+        try:
+            await room.edit(user_limit=new_limit)
+            await interaction.response.send_message(
+                f"Room limit increased to **{new_limit}**.", ephemeral=True
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I need Manage Channels permission to change the room limit.", ephemeral=True
+            )
 
-    @discord.ui.button(label="Unblock", emoji="🔓", style=discord.ButtonStyle.secondary,
-                       custom_id="onyx_vm:unblock", row=1)
-    async def unblock(self, interaction, button):
-        await self.open_modal(interaction, "unblock")
+    @discord.ui.button(label="Decrease", emoji="➖", style=discord.ButtonStyle.secondary,
+                       custom_id="onyx_vm:decrease", row=1)
+    async def decrease(self, interaction: discord.Interaction, button: discord.ui.Button):
+        room = await self.get_control_room(interaction)
+        if room is None:
+            return
+        if room.user_limit == 0:
+            return await interaction.response.send_message(
+                "Your room is already unlimited.", ephemeral=True
+            )
+        new_limit = max(0, room.user_limit - 1)
+        try:
+            await room.edit(user_limit=new_limit)
+            await interaction.response.send_message(
+                f"Room limit decreased to **{new_limit or 'unlimited'}**.", ephemeral=True
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I need Manage Channels permission to change the room limit.", ephemeral=True
+            )
 
 
 class VoiceMaster(commands.Cog):
@@ -246,7 +292,6 @@ class VoiceMaster(commands.Cog):
         self.panel_view = VoiceMasterPanel(self)
 
     async def cog_load(self):
-        # Persistent custom IDs keep the panel functional after restarts.
         self.bot.add_view(self.panel_view)
 
     async def restore_rooms(self):
@@ -269,7 +314,7 @@ class VoiceMaster(commands.Cog):
                     pass
                 await self.bot.db.execute(
                     "DELETE FROM onyx_temp_voice_rooms WHERE channel_id=?",
-                    (int(row["channel_id"]),)
+                    (channel.id,)
                 )
                 continue
             self.owners[channel.id] = int(row["owner_id"])
@@ -284,11 +329,12 @@ class VoiceMaster(commands.Cog):
         return channel if isinstance(channel, discord.VoiceChannel) and channel.id in self.owners else None
 
     async def can_control(self, interaction, room):
-        owner_id = self.owners.get(room.id)
-        return owner_id == interaction.user.id or interaction.user.guild_permissions.manage_channels
+        return self.owners.get(room.id) == interaction.user.id or interaction.user.guild_permissions.manage_channels
 
-    @commands.command(name="voicemaster_setup",
-                      help="Create the ONYX VoiceMaster category, join-to-create channel, and control panel.")
+    @commands.command(
+        name="voicemaster_setup",
+        help="Create the ONYX VoiceMaster category, join-to-create channel, and control panel."
+    )
     @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def voicemaster_setup(self, ctx):
@@ -306,17 +352,15 @@ class VoiceMaster(commands.Cog):
             )
 
         category = await guild.create_category(
-            "ONYX VOICEMASTER",
-            reason=f"VoiceMaster setup by {ctx.author}"
+            "ONYX VOICEMASTER", reason=f"VoiceMaster setup by {ctx.author}"
         )
         if isinstance(trigger, discord.VoiceChannel):
             await trigger.edit(category=category, name="➕ Join to Create")
         else:
             trigger = await guild.create_voice_channel(
-                "➕ Join to Create",
-                category=category,
-                reason="ONYX VoiceMaster setup"
+                "➕ Join to Create", category=category, reason="ONYX VoiceMaster setup"
             )
+
         interface = await guild.create_text_channel(
             "voice-interface",
             category=category,
@@ -330,19 +374,18 @@ class VoiceMaster(commands.Cog):
         )
 
         embed = discord.Embed(
-            title="Control Your Voice Chat",
+            title="VoiceMaster Interface",
             description=PANEL_DESCRIPTION,
             color=TEAL
         )
-        embed.set_author(name="ONYX • VOICEMASTER", icon_url=self.bot.user.display_avatar.url)
+        embed.set_author(name="ONYX  •  VOICEMASTER", icon_url=self.bot.user.display_avatar.url)
         embed.set_thumbnail(url=self.bot.user.display_avatar.url)
-        embed.set_footer(text="ONYX • Temporary Voice Channel Controls")
+        embed.set_footer(text="ONYX  •  Temporary Voice Controls")
         await interface.send(embed=embed, view=self.panel_view)
         await ctx.send(
-            f"**ONYX VoiceMaster is ready.**\n"
-            f"• Join-to-create: {trigger.mention}\n"
-            f"• Control panel: {interface.mention}\n"
-            f"• Category: **{category.name}**"
+            "**ONYX VoiceMaster is ready.**\n"
+            f"• Join to create: {trigger.mention}\n"
+            f"• Interface: {interface.mention}"
         )
 
     @commands.Cog.listener()
@@ -353,10 +396,9 @@ class VoiceMaster(commands.Cog):
                 (member.guild.id,)
             )
             if cfg and after.channel.id == int(cfg["trigger_channel_id"]):
-                category = after.channel.category
                 room = await member.guild.create_voice_channel(
                     name=f"{member.display_name}'s room"[:90],
-                    category=category,
+                    category=after.channel.category,
                     reason="ONYX temporary voice room"
                 )
                 self.owners[room.id] = member.id
