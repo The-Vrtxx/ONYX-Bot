@@ -69,6 +69,16 @@ CREATE TABLE IF NOT EXISTS onyx_tickets (
 CREATE TABLE IF NOT EXISTS onyx_ticket_panels (
  guild_id BIGINT PRIMARY KEY, channel_id BIGINT NOT NULL, message_id BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS onyx_mod_notes (
+ id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL,
+ moderator_id BIGINT NOT NULL, note TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS onyx_security_settings (
+ guild_id BIGINT PRIMARY KEY, alert_channel_id BIGINT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS onyx_temp_voice_rooms (
+ guild_id BIGINT NOT NULL, channel_id BIGINT PRIMARY KEY, owner_id BIGINT NOT NULL
+);
 """
 
 class ExecuteResult:
@@ -129,6 +139,18 @@ class Database:
                 );
                 CREATE TABLE IF NOT EXISTS onyx_ticket_panels (
                     guild_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS onyx_mod_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL, moderator_id INTEGER NOT NULL,
+                    note TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS onyx_security_settings (
+                    guild_id INTEGER PRIMARY KEY, alert_channel_id INTEGER NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE IF NOT EXISTS onyx_temp_voice_rooms (
+                    guild_id INTEGER NOT NULL, channel_id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL
                 );
             """)
             await self.conn.commit()
