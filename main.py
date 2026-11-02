@@ -418,6 +418,21 @@ HELP_CATEGORIES = {
         ("reload", ",reload [cog]", "Reload one cog or all cogs (bot owner only)."),
     ],
 
+    Moderation:
+  ("modnote", ",modnote @member <note>", "Save a staff-only note.")
+  ("modnotes", ",modnotes @member", "View staff-only notes.")
+  ("nick", ",nick @member <nickname>", "Change a member nickname.")
+  ("role_add", ",role_add @member @role", "Give a member a role.")
+  ("role_remove", ",role_remove @member @role", "Remove a member role.")
+Security:
+  ("security_set", ",security_set #channel", "Set security alert destination.")
+  ("security_off", ",security_off", "Disable security alerts.")
+Server Tools:
+  ("channelcount", ",channelcount", "Show channel counts.")
+  ("rolelist", ",rolelist", "List server roles.")
+  ("emoji_list", ",emoji_list", "List custom server emojis.")
+  ("permissions", ",permissions [@member]", "Show key permissions.")
+
     "Special Role": [
         ("shh", ",shh @member", "Toggle the configured special role on or off."),
         ("shh_whitelist_add", ",shh whitelist add @member", "Allow a member to use shh (bot owner only)."),
