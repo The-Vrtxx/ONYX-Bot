@@ -55,6 +55,14 @@ CREATE TABLE IF NOT EXISTS onyx_antinuke_events (
  id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, actor_id BIGINT NOT NULL, action TEXT NOT NULL,
  detail TEXT NOT NULL, punishment TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS onyx_jail_settings (
+ guild_id BIGINT PRIMARY KEY, role_id BIGINT NOT NULL, category_id BIGINT NOT NULL, channel_id BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS onyx_jails (
+ guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL, saved_role_ids TEXT NOT NULL DEFAULT '[]',
+ moderator_id BIGINT NOT NULL, reason TEXT NOT NULL, expires_at TIMESTAMP,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (guild_id,user_id)
+);
 """
 
 class ExecuteResult:
@@ -106,6 +114,8 @@ class Database:
                 CREATE TABLE IF NOT EXISTS onyx_antinuke_whitelist (guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY (guild_id,user_id));
                 CREATE TABLE IF NOT EXISTS onyx_antinuke_staff_roles (guild_id INTEGER NOT NULL, role_id INTEGER NOT NULL, PRIMARY KEY (guild_id,role_id));
                 CREATE TABLE IF NOT EXISTS onyx_antinuke_events (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, actor_id INTEGER NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL, punishment TEXT NOT NULL DEFAULT 'pending', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+                CREATE TABLE IF NOT EXISTS onyx_jail_settings (guild_id INTEGER PRIMARY KEY, role_id INTEGER NOT NULL, category_id INTEGER NOT NULL, channel_id INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS onyx_jails (guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, saved_role_ids TEXT NOT NULL DEFAULT '[]', moderator_id INTEGER NOT NULL, reason TEXT NOT NULL, expires_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (guild_id,user_id));
             """)
             await self.conn.commit()
 
