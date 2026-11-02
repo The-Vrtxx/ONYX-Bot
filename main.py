@@ -443,13 +443,24 @@ def _help_embed(prefix, category=None, command=None, page=0):
     embed.set_footer(text="ONYX • Modular Discord Management")
 
     if category is None:
+        category_items = list(HELP_CATEGORIES.items())
+        total_pages = max(1, (len(category_items) + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
+        page = max(0, min(page, total_pages - 1))
+        start_index = page * COMMANDS_PER_PAGE
+        page_items = category_items[start_index:start_index + COMMANDS_PER_PAGE]
+
         overview = "\n".join(
-            f"**{index}. {name}** · {len(items)} commands"
-            for index, (name, items) in enumerate(HELP_CATEGORIES.items(), 1)
+            f"**{start_index + index}. {name}** · {len(items)} commands"
+            for index, (name, items) in enumerate(page_items, 1)
         )
         embed.add_field(
             name="Command Categories",
-            value=overview[:1024] or "No categories available.",
+            value=overview or "No categories available.",
+            inline=False
+        )
+        embed.add_field(
+            name="Category Page",
+            value=f"**{page + 1} / {total_pages}**  •  {len(category_items)} total categories",
             inline=False
         )
         embed.add_field(
@@ -474,7 +485,7 @@ def _help_embed(prefix, category=None, command=None, page=0):
             inline=False
         )
         embed.add_field(
-            name="Page",
+            name="Command Page",
             value=f"**{page + 1} / {total_pages}**  •  {len(items)} total commands",
             inline=False
         )
@@ -577,6 +588,13 @@ class OnyxHelpView(discord.ui.View):
         self.add_item(self.command_select)
         self.refresh_page_buttons()
 
+    def _page_count(self):
+        if self.category is None:
+            count = len(HELP_CATEGORIES)
+        else:
+            count = len(HELP_CATEGORIES.get(self.category, []))
+        return max(1, (count + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
+
     def refresh_command_select(self):
         items = HELP_CATEGORIES.get(self.category, [])
         start = self.page * COMMANDS_PER_PAGE
@@ -590,51 +608,46 @@ class OnyxHelpView(discord.ui.View):
             )
             for index, (name, _, description) in enumerate(page_items, 1)
         ] or [
-            discord.SelectOption(label="No commands", value="_none")
+            discord.SelectOption(label="Choose a category first", value="_none")
         ]
         self.command_select.disabled = not bool(page_items)
         self.command_select.placeholder = (
             f"Commands {start + 1}–{min(start + COMMANDS_PER_PAGE, len(items))}"
-            if items else "No commands in this category"
+            if items else "Choose a category first"
         )
 
     def refresh_page_buttons(self):
-        items = HELP_CATEGORIES.get(self.category, [])
-        total_pages = max(1, (len(items) + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
-        self.previous_page.disabled = self.category is None or self.page <= 0
-        self.next_page.disabled = self.category is None or self.page >= total_pages - 1
+        self.previous_page.disabled = self.page <= 0
+        self.next_page.disabled = self.page >= self._page_count() - 1
+
+    async def _change_page(self, interaction, direction):
+        total_pages = self._page_count()
+        new_page = self.page + direction
+        if not 0 <= new_page < total_pages:
+            return await interaction.response.defer()
+
+        self.page = new_page
+        self.command = None
+        self.refresh_command_select()
+        self.refresh_page_buttons()
+        await interaction.response.edit_message(
+            embed=_help_embed(
+                self.prefix,
+                self.category,
+                page=self.page
+            ),
+            view=self
+        )
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary,
                        emoji="◀️", row=2)
     async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.category is None or self.page <= 0:
-            return await interaction.response.defer()
-        self.page -= 1
-        self.command = None
-        self.refresh_command_select()
-        self.refresh_page_buttons()
-        await interaction.response.edit_message(
-            embed=_help_embed(self.prefix, self.category, page=self.page),
-            view=self
-        )
+        await self._change_page(interaction, -1)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary,
                        emoji="▶️", row=2)
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.category is None:
-            return await interaction.response.defer()
-        items = HELP_CATEGORIES.get(self.category, [])
-        total_pages = max(1, (len(items) + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
-        if self.page >= total_pages - 1:
-            return await interaction.response.defer()
-        self.page += 1
-        self.command = None
-        self.refresh_command_select()
-        self.refresh_page_buttons()
-        await interaction.response.edit_message(
-            embed=_help_embed(self.prefix, self.category, page=self.page),
-            view=self
-        )
+        await self._change_page(interaction, 1)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
