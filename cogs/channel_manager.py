@@ -1,7 +1,11 @@
+import asyncio
 import secrets
 
 import discord
 from discord.ext import commands
+
+
+NUKE_GIF_URL = "https://i.pinimg.com/originals/47/12/89/471289cde2490c80f60d5e85bcdfb6da.gif"
 
 
 class ConfirmActionView(discord.ui.View):
@@ -53,8 +57,8 @@ class ChannelManager(commands.Cog):
     @commands.has_permissions(manage_channels=True)
     async def channel(self, ctx):
         await ctx.send(
-            "**Channel Management**\n"
-            "`,channel create <name>` - Create a text channel\n"
+            "**Channel Management**\\n"
+            "`,channel create <name>` - Create a text channel\\n"
             "`,channel delete #channel` - Delete a text channel"
         )
 
@@ -67,10 +71,10 @@ class ChannelManager(commands.Cog):
                 "Channel names must be between 1 and 100 characters."
             )
         try:
-            channel = await ctx.guild.create_text_channel(
+            created = await ctx.guild.create_text_channel(
                 name=name, reason=f"Created by {ctx.author} using ONYX."
             )
-            await ctx.send(f"Created text channel {channel.mention}.")
+            await ctx.send(f"Created text channel {created.mention}.")
         except discord.Forbidden:
             await ctx.send("I don't have permission to create channels.")
         except discord.HTTPException:
@@ -88,7 +92,7 @@ class ChannelManager(commands.Cog):
         )
         view = ConfirmActionView(ctx.author.id)
         message = await ctx.send(
-            f"**Confirm channel deletion**\n{warning}\nThis cannot be undone.",
+            f"**Confirm channel deletion**\\n{warning}\\nThis cannot be undone.",
             view=view
         )
         await view.wait()
@@ -124,6 +128,7 @@ class ChannelManager(commands.Cog):
 
         if not isinstance(channel, discord.TextChannel):
             return await ctx.send("Nuke can only be used in a text channel.")
+
         if member.id in self.pending_nukes:
             return await ctx.send(
                 "You already have a nuke verification in progress. "
@@ -132,17 +137,9 @@ class ChannelManager(commands.Cog):
 
         code = f"{secrets.randbelow(900000) + 100000}"
 
+        # The DM contains only the copyable one-time code.
         try:
-            await member.send(
-                f"**ONYX channel recreation verification**\n\n"
-                f"A request was made to recreate `#{channel.name}` in "
-                f"**{ctx.guild.name}**.\n\n"
-                f"Your one-time code is:\n```{code}```\n"
-                f"To continue, send this exact code as a message in "
-                f"{channel.mention} within **60 seconds**.\n\n"
-                "If you did not request this, ignore this DM. "
-                "No channel changes will occur."
-            )
+            await member.send(f"`{code}`")
         except discord.Forbidden:
             return await ctx.send(
                 f"{member.mention}, I couldn't DM you. Enable DMs from "
@@ -155,8 +152,8 @@ class ChannelManager(commands.Cog):
 
         self.pending_nukes.add(member.id)
         await ctx.send(
-            f"{member.mention}, I've sent you a one-time code by DM. "
-            "Send it in this channel within **60 seconds** to continue."
+            f"{member.mention}, your verification code was sent by DM. "
+            "Post it in this channel within **60 seconds**."
         )
 
         def check(message):
@@ -172,11 +169,11 @@ class ChannelManager(commands.Cog):
         try:
             await self.bot.wait_for("message", timeout=60.0, check=check)
             verified = True
-        except TimeoutError:
+        except asyncio.TimeoutError:
             try:
                 await ctx.send(
                     f"{member.mention}, verification expired. "
-                    "The channel was not changed. Run `,nuke` to try again."
+                    "The channel was not changed."
                 )
             except discord.HTTPException:
                 pass
@@ -187,21 +184,26 @@ class ChannelManager(commands.Cog):
             return
 
         current_member = ctx.guild.get_member(member.id)
-        if current_member is None or not current_member.guild_permissions.manage_channels:
-            try:
-                await ctx.send(
-                    "Verification passed, but your Manage Channels permission "
-                    "is no longer available. Nothing was changed."
-                )
-            except discord.HTTPException:
-                pass
-            return
+        if (
+            current_member is None
+            or not current_member.guild_permissions.manage_channels
+        ):
+            return await ctx.send(
+                "Verification passed, but you no longer have Manage Channels. "
+                "Nothing was changed."
+            )
+
+        countdown_message = await channel.send("Nuke sequence starting: **5**")
+        for number in range(4, -1, -1):
+            await asyncio.sleep(1)
+            await countdown_message.edit(
+                content=f"Nuke sequence starting: **{number}**"
+            )
+
+        # Show the selected GIF in the original channel before recreation.
+        await channel.send(NUKE_GIF_URL)
 
         try:
-            await ctx.send(
-                "Code verified. Recreating this channel now. "
-                "Messages from the old channel will not be copied."
-            )
             replacement = await channel.clone(
                 name=channel.name,
                 reason=f"Channel recreated by {member} after DM code verification."
@@ -210,14 +212,19 @@ class ChannelManager(commands.Cog):
                 position=channel.position,
                 reason="Preserving channel position during recreation."
             )
+
             await channel.delete(
                 reason=f"Channel recreated by {member} after DM code verification."
             )
-            await replacement.send(
-                f"This channel has been recreated by {member.mention} "
-                "after successful DM verification. Previous messages "
-                "were not copied."
+
+            # Final new-channel post: GIF and who initiated the recreation.
+            result = discord.Embed(
+                description=f"This channel was nuked by {member.mention}.",
+                color=discord.Color.dark_grey()
             )
+            result.set_image(url=NUKE_GIF_URL)
+            await replacement.send(embed=result)
+
         except discord.Forbidden:
             try:
                 await ctx.send(
