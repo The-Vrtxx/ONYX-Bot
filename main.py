@@ -427,13 +427,16 @@ HELP_CATEGORIES = {
 }
 
 
-def _help_embed(prefix, category=None, command=None):
+COMMANDS_PER_PAGE = 4
+
+
+def _help_embed(prefix, category=None, command=None, page=0):
     embed = discord.Embed(
         title="ONYX • Help Center",
         description=(
             "Browse commands by category using the menus below.\n"
             f"**Current prefix:** `{prefix}`  •  **Prefix commands only**\n"
-            "Choose a category, then choose a command to see what it does."
+            "Choose a category, then select a command for details."
         ),
         color=discord.Color.from_rgb(25, 27, 32)
     )
@@ -441,12 +444,12 @@ def _help_embed(prefix, category=None, command=None):
 
     if category is None:
         overview = "\n".join(
-            f"**{name}** · {len(items)} commands"
-            for name, items in HELP_CATEGORIES.items()
+            f"**{index}. {name}** · {len(items)} commands"
+            for index, (name, items) in enumerate(HELP_CATEGORIES.items(), 1)
         )
         embed.add_field(
             name="Command Categories",
-            value=overview,
+            value=overview[:1024] or "No categories available.",
             inline=False
         )
         embed.add_field(
@@ -456,26 +459,37 @@ def _help_embed(prefix, category=None, command=None):
         )
     else:
         items = HELP_CATEGORIES[category]
+        total_pages = max(1, (len(items) + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
+        page = max(0, min(page, total_pages - 1))
+        first_index = page * COMMANDS_PER_PAGE
+        page_items = items[first_index:first_index + COMMANDS_PER_PAGE]
+
         listing = "\n".join(
-            f"`{prefix}{usage[1:] if usage.startswith(',') else usage}`"
-            for _, usage, _ in items
+            f"**{first_index + index}.** `{prefix}{usage[1:] if usage.startswith(',') else usage}`"
+            for index, (_, usage, _) in enumerate(page_items, 1)
         )
         embed.add_field(
             name=f"{category} Commands",
-            value=listing[:1024] or "No commands listed.",
+            value=listing or "No commands listed.",
+            inline=False
+        )
+        embed.add_field(
+            name="Page",
+            value=f"**{page + 1} / {total_pages}**  •  {len(items)} total commands",
             inline=False
         )
 
         if command:
-            match = next(
-                (item for item in items if item[0] == command),
+            match_index = next(
+                (index for index, item in enumerate(items, 1) if item[0] == command),
                 None
             )
+            match = items[match_index - 1] if match_index else None
             if match:
                 usage = match[1]
                 usage = usage[1:] if usage.startswith(",") else usage
                 embed.add_field(
-                    name=match[0],
+                    name=f"Command {match_index}: {match[0]}",
                     value=f"**Usage:** `{prefix}{usage}`\n{match[2]}",
                     inline=False
                 )
@@ -505,11 +519,14 @@ class HelpCategorySelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         self.help_view.category = self.values[0]
         self.help_view.command = None
+        self.help_view.page = 0
         self.help_view.refresh_command_select()
+        self.help_view.refresh_page_buttons()
         await interaction.response.edit_message(
             embed=_help_embed(
                 self.help_view.prefix,
-                self.help_view.category
+                self.help_view.category,
+                page=self.help_view.page
             ),
             view=self.help_view
         )
@@ -538,7 +555,8 @@ class HelpCommandSelect(discord.ui.Select):
             embed=_help_embed(
                 self.help_view.prefix,
                 self.help_view.category,
-                self.help_view.command
+                self.help_view.command,
+                self.help_view.page
             ),
             view=self.help_view
         )
@@ -551,28 +569,71 @@ class OnyxHelpView(discord.ui.View):
         self.author_id = author_id
         self.category = None
         self.command = None
+        self.page = 0
+
         self.category_select = HelpCategorySelect(self)
         self.command_select = HelpCommandSelect(self)
         self.add_item(self.category_select)
         self.add_item(self.command_select)
+        self.refresh_page_buttons()
 
     def refresh_command_select(self):
         items = HELP_CATEGORIES.get(self.category, [])
+        start = self.page * COMMANDS_PER_PAGE
+        page_items = items[start:start + COMMANDS_PER_PAGE]
+
         self.command_select.options = [
             discord.SelectOption(
-                label=name[:100],
+                label=f"{start + index}. {name}"[:100],
                 description=description[:100],
                 value=name
             )
-            for name, _, description in items
+            for index, (name, _, description) in enumerate(page_items, 1)
         ] or [
             discord.SelectOption(label="No commands", value="_none")
         ]
-        self.command_select.disabled = not bool(items)
+        self.command_select.disabled = not bool(page_items)
         self.command_select.placeholder = (
-            f"Choose from {self.category}…"
-            if self.category
-            else "Choose a command for details…"
+            f"Commands {start + 1}–{min(start + COMMANDS_PER_PAGE, len(items))}"
+            if items else "No commands in this category"
+        )
+
+    def refresh_page_buttons(self):
+        items = HELP_CATEGORIES.get(self.category, [])
+        total_pages = max(1, (len(items) + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
+        self.previous_page.disabled = self.category is None or self.page <= 0
+        self.next_page.disabled = self.category is None or self.page >= total_pages - 1
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary,
+                       emoji="◀️", row=2)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.category is None or self.page <= 0:
+            return await interaction.response.defer()
+        self.page -= 1
+        self.command = None
+        self.refresh_command_select()
+        self.refresh_page_buttons()
+        await interaction.response.edit_message(
+            embed=_help_embed(self.prefix, self.category, page=self.page),
+            view=self
+        )
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary,
+                       emoji="▶️", row=2)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.category is None:
+            return await interaction.response.defer()
+        items = HELP_CATEGORIES.get(self.category, [])
+        total_pages = max(1, (len(items) + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
+        if self.page >= total_pages - 1:
+            return await interaction.response.defer()
+        self.page += 1
+        self.command = None
+        self.refresh_command_select()
+        self.refresh_page_buttons()
+        await interaction.response.edit_message(
+            embed=_help_embed(self.prefix, self.category, page=self.page),
+            view=self
         )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
