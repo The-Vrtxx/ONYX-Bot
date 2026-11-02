@@ -3,8 +3,8 @@ from discord.ext import commands
 
 
 # Alias -> existing registered command path.
-# Aliases are attached to the real command objects, so permissions,
-# cooldowns, checks, and command callbacks remain exactly the same.
+# Aliases point to the original command, preserving its checks,
+# permissions, cooldowns, and callback.
 COMMAND_ALIASES = {
     # Core / utility
     "help": ["h", "cmds"],
@@ -173,49 +173,75 @@ COMMAND_ALIASES = {
 
 
 class CommandAliases(commands.Cog):
-    """Adds short aliases to ONYX's existing prefix commands."""
+    """Registers short aliases for ONYX's existing prefix commands."""
 
     def __init__(self, bot):
         self.bot = bot
         self.applied = False
+        self.applied_count = 0
         self.skipped = []
 
     @commands.Cog.listener()
     async def on_ready(self):
-        # on_ready runs after setup_hook has loaded all cogs. Guard against
-        # reconnects so aliases are not appended repeatedly.
-        if self.applied:
-            return
-        self.applied = True
+        # Commands from every extension are loaded in setup_hook before on_ready.
+        # Re-run safely after reconnects/reloads; do not duplicate aliases.
+        self.apply_aliases()
+
+    def apply_aliases(self):
+        self.applied_count = 0
+        self.skipped = []
 
         for command_path, aliases in COMMAND_ALIASES.items():
             command = self.bot.get_command(command_path)
             if command is None:
-                self.skipped.append(command_path)
+                self.skipped.append(f"{command_path} (command not found)")
                 continue
 
-            for alias in aliases:
-                alias = alias.strip().lower()
+            namespace = command.parent
+            registry = namespace.all_commands if namespace else self.bot.all_commands
+
+            for raw_alias in aliases:
+                alias = raw_alias.strip().lower()
                 if not alias or " " in alias:
                     continue
 
-                # Check the correct command namespace (root or parent group).
-                namespace = command.parent
-                existing = (
-                    namespace.get_command(alias)
-                    if namespace is not None
-                    else self.bot.get_command(alias)
-                )
+                existing = registry.get(alias)
                 if existing is not None:
                     if existing is command:
+                        if alias not in command.aliases:
+                            command.aliases.append(alias)
                         continue
-                    self.skipped.append(f"{command_path} -> {alias} (already used)")
+                    self.skipped.append(
+                        f"{command_path} -> {alias} (already registered)"
+                    )
                     continue
 
+                # Critical: register the alias in discord.py's actual lookup
+                # mapping. Updating command.aliases alone does not do this.
+                registry[alias] = command
                 if alias not in command.aliases:
                     command.aliases.append(alias)
+                self.applied_count += 1
 
-    @commands.command(name="aliases", aliases=["als"], help="Show ONYX command abbreviations.", hidden=True)
+        self.applied = True
+
+        # Log a useful summary in Render logs.
+        import logging
+        logger = logging.getLogger("bot.aliases")
+        logger.info(
+            "Command aliases registered: %s | skipped: %s",
+            self.applied_count,
+            len(self.skipped)
+        )
+        if self.skipped:
+            logger.warning("Alias registration skipped: %s", "; ".join(self.skipped))
+
+    @commands.command(
+        name="aliases",
+        aliases=["als"],
+        help="Show ONYX command abbreviations.",
+        hidden=True
+    )
     async def aliases(self, ctx, *, search: str = None):
         rows = []
         for command_path, short_names in COMMAND_ALIASES.items():
@@ -234,54 +260,55 @@ class CommandAliases(commands.Cog):
         if not rows:
             return await ctx.send("No matching command abbreviations were found.")
 
-        # Discord embeds have a 6,000-character aggregate limit. Split into
-        # manageable pages and avoid an oversized single message.
         pages = [rows[i:i + 12] for i in range(0, len(rows), 12)]
-        page = 1
-        embed = discord.Embed(
-            title="ONYX • Command Abbreviations",
-            description="\n".join(pages[0]),
-            color=discord.Color.from_rgb(44, 38, 67)
-        )
-        embed.set_footer(
-            text=f"{len(rows)} command entries • Page {page}/{len(pages)} • Use ,aliases <name> to search"
-        )
-        message = await ctx.send(embed=embed)
-        if len(pages) > 1:
-            for emoji in ("◀️", "▶️"):
-                try:
-                    await message.add_reaction(emoji)
-                except discord.HTTPException:
-                    break
+        current = 0
 
-            def check(reaction, user):
-                return (
-                    user.id == ctx.author.id
-                    and reaction.message.id == message.id
-                    and str(reaction.emoji) in {"◀️", "▶️"}
-                )
+        def make_embed(index):
+            embed = discord.Embed(
+                title="ONYX • Command Abbreviations",
+                description="\n".join(pages[index]),
+                color=discord.Color.from_rgb(44, 38, 67)
+            )
+            embed.set_footer(
+                text=f"{len(rows)} command entries • Page {index + 1}/{len(pages)} • Use ,aliases <name> to search"
+            )
+            return embed
 
-            current = 0
-            while True:
-                try:
-                    reaction, user = await self.bot.wait_for(
-                        "reaction_add", timeout=90, check=check
-                    )
-                except TimeoutError:
-                    break
-                if str(reaction.emoji) == "▶️":
-                    current = min(len(pages) - 1, current + 1)
-                else:
-                    current = max(0, current - 1)
-                embed.description = "\n".join(pages[current])
-                embed.set_footer(
-                    text=f"{len(rows)} command entries • Page {current + 1}/{len(pages)} • Use ,aliases <name> to search"
+        message = await ctx.send(embed=make_embed(current))
+        if len(pages) <= 1:
+            return
+
+        for emoji in ("◀️", "▶️"):
+            try:
+                await message.add_reaction(emoji)
+            except discord.HTTPException:
+                return
+
+        def check(reaction, user):
+            return (
+                user.id == ctx.author.id
+                and reaction.message.id == message.id
+                and str(reaction.emoji) in {"◀️", "▶️"}
+            )
+
+        while True:
+            try:
+                reaction, user = await self.bot.wait_for(
+                    "reaction_add", timeout=90, check=check
                 )
-                await message.edit(embed=embed)
-                try:
-                    await message.remove_reaction(reaction, user)
-                except discord.HTTPException:
-                    pass
+            except TimeoutError:
+                break
+
+            if str(reaction.emoji) == "▶️":
+                current = min(len(pages) - 1, current + 1)
+            else:
+                current = max(0, current - 1)
+
+            await message.edit(embed=make_embed(current))
+            try:
+                await message.remove_reaction(reaction, user)
+            except discord.HTTPException:
+                pass
 
 
 async def setup(bot):
