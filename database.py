@@ -1,4 +1,4 @@
-"""Database layer for ONYX V5.
+"""Database layer for ONYX.
 
 PostgreSQL is recommended for hosted multi-server deployments.
 SQLite remains available for local development.
@@ -26,58 +26,34 @@ CREATE TABLE IF NOT EXISTS mod_cases (
  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS warn_settings (guild_id BIGINT PRIMARY KEY, threshold INTEGER DEFAULT 3, action TEXT DEFAULT 'timeout');
-CREATE TABLE IF NOT EXISTS role_panels (
- guild_id BIGINT NOT NULL, channel_id BIGINT NOT NULL, message_id BIGINT NOT NULL, role_id BIGINT NOT NULL,
- PRIMARY KEY (guild_id, message_id, role_id)
-);
-CREATE TABLE IF NOT EXISTS embed_templates (
- guild_id BIGINT NOT NULL, name TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
- color TEXT DEFAULT '5865F2', PRIMARY KEY (guild_id, name)
-);
+CREATE TABLE IF NOT EXISTS role_panels (guild_id BIGINT NOT NULL, channel_id BIGINT NOT NULL, message_id BIGINT NOT NULL, role_id BIGINT NOT NULL, PRIMARY KEY (guild_id, message_id, role_id));
+CREATE TABLE IF NOT EXISTS embed_templates (guild_id BIGINT NOT NULL, name TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, color TEXT DEFAULT '5865F2', PRIMARY KEY (guild_id, name));
 CREATE TABLE IF NOT EXISTS shh_whitelist (guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL, PRIMARY KEY (guild_id, user_id));
 CREATE TABLE IF NOT EXISTS shh_settings (guild_id BIGINT PRIMARY KEY, role_id BIGINT NOT NULL);
-CREATE TABLE IF NOT EXISTS warnings (
- id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL, moderator_id BIGINT NOT NULL,
- reason TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS levels (
- guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL, xp BIGINT DEFAULT 0, level INTEGER DEFAULT 0,
- PRIMARY KEY (guild_id, user_id)
-);
+CREATE TABLE IF NOT EXISTS warnings (id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL, moderator_id BIGINT NOT NULL, reason TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS levels (guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL, xp BIGINT DEFAULT 0, level INTEGER DEFAULT 0, PRIMARY KEY (guild_id, user_id));
 CREATE TABLE IF NOT EXISTS level_rewards (guild_id BIGINT NOT NULL, level INTEGER NOT NULL, role_id BIGINT NOT NULL, PRIMARY KEY (guild_id, level));
 CREATE TABLE IF NOT EXISTS self_roles (guild_id BIGINT NOT NULL, role_id BIGINT NOT NULL, PRIMARY KEY (guild_id, role_id));
 CREATE TABLE IF NOT EXISTS custom_commands (guild_id BIGINT NOT NULL, name TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY (guild_id, name));
 CREATE TABLE IF NOT EXISTS lastfm_users (user_id BIGINT PRIMARY KEY, username TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS automod_ignored (guild_id BIGINT NOT NULL, channel_id BIGINT NOT NULL, PRIMARY KEY (guild_id, channel_id));
-
-CREATE TABLE IF NOT EXISTS onyx_autoresponses (
- guild_id BIGINT NOT NULL, trigger TEXT NOT NULL, response TEXT NOT NULL,
- PRIMARY KEY (guild_id, trigger)
+CREATE TABLE IF NOT EXISTS onyx_autoresponses (guild_id BIGINT NOT NULL, trigger TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY (guild_id, trigger));
+CREATE TABLE IF NOT EXISTS onyx_antiraid (guild_id BIGINT PRIMARY KEY, join_count INTEGER NOT NULL, window_seconds INTEGER NOT NULL, alert_channel_id BIGINT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS onyx_voicemaster (guild_id BIGINT PRIMARY KEY, trigger_channel_id BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS onyx_tickets (id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, channel_id BIGINT NOT NULL UNIQUE, opener_id BIGINT NOT NULL, claimed_by BIGINT, status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, closed_at TIMESTAMP);
+CREATE TABLE IF NOT EXISTS onyx_ticket_panels (guild_id BIGINT PRIMARY KEY, channel_id BIGINT NOT NULL, message_id BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS onyx_mod_notes (id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL, moderator_id BIGINT NOT NULL, note TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS onyx_security_settings (guild_id BIGINT PRIMARY KEY, alert_channel_id BIGINT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS onyx_temp_voice_rooms (guild_id BIGINT NOT NULL, channel_id BIGINT PRIMARY KEY, owner_id BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS onyx_antinuke_settings (
+ guild_id BIGINT PRIMARY KEY, threshold INTEGER NOT NULL DEFAULT 3, window_seconds INTEGER NOT NULL DEFAULT 10,
+ punishment TEXT NOT NULL DEFAULT 'none', log_channel_id BIGINT, jail_role_id BIGINT, enabled INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS onyx_antiraid (
- guild_id BIGINT PRIMARY KEY, join_count INTEGER NOT NULL, window_seconds INTEGER NOT NULL,
- alert_channel_id BIGINT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
-);
-CREATE TABLE IF NOT EXISTS onyx_voicemaster (
- guild_id BIGINT PRIMARY KEY, trigger_channel_id BIGINT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS onyx_tickets (
- id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, channel_id BIGINT NOT NULL UNIQUE,
- opener_id BIGINT NOT NULL, claimed_by BIGINT, status TEXT NOT NULL DEFAULT 'open',
- created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, closed_at TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS onyx_ticket_panels (
- guild_id BIGINT PRIMARY KEY, channel_id BIGINT NOT NULL, message_id BIGINT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS onyx_mod_notes (
- id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL,
- moderator_id BIGINT NOT NULL, note TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS onyx_security_settings (
- guild_id BIGINT PRIMARY KEY, alert_channel_id BIGINT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
-);
-CREATE TABLE IF NOT EXISTS onyx_temp_voice_rooms (
- guild_id BIGINT NOT NULL, channel_id BIGINT PRIMARY KEY, owner_id BIGINT NOT NULL
+CREATE TABLE IF NOT EXISTS onyx_antinuke_whitelist (guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL, PRIMARY KEY (guild_id,user_id));
+CREATE TABLE IF NOT EXISTS onyx_antinuke_staff_roles (guild_id BIGINT NOT NULL, role_id BIGINT NOT NULL, PRIMARY KEY (guild_id,role_id));
+CREATE TABLE IF NOT EXISTS onyx_antinuke_events (
+ id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, actor_id BIGINT NOT NULL, action TEXT NOT NULL,
+ detail TEXT NOT NULL, punishment TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -117,41 +93,19 @@ class Database:
             columns = await (await self.conn.execute("PRAGMA table_info(guild_settings)")).fetchall()
             if not any(column["name"] == "prefix" for column in columns):
                 await self.conn.execute("ALTER TABLE guild_settings ADD COLUMN prefix TEXT NOT NULL DEFAULT ','")
-            # Additive migrations: safe for existing SQLite databases.
             await self.conn.executescript("""
-                CREATE TABLE IF NOT EXISTS onyx_autoresponses (
-                    guild_id INTEGER NOT NULL, trigger TEXT NOT NULL, response TEXT NOT NULL,
-                    PRIMARY KEY (guild_id, trigger)
-                );
-                CREATE TABLE IF NOT EXISTS onyx_antiraid (
-                    guild_id INTEGER PRIMARY KEY, join_count INTEGER NOT NULL,
-                    window_seconds INTEGER NOT NULL, alert_channel_id INTEGER NOT NULL,
-                    enabled INTEGER NOT NULL DEFAULT 1
-                );
-                CREATE TABLE IF NOT EXISTS onyx_voicemaster (
-                    guild_id INTEGER PRIMARY KEY, trigger_channel_id INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS onyx_tickets (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL,
-                    channel_id INTEGER NOT NULL UNIQUE, opener_id INTEGER NOT NULL,
-                    claimed_by INTEGER, status TEXT NOT NULL DEFAULT 'open',
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP, closed_at TEXT
-                );
-                CREATE TABLE IF NOT EXISTS onyx_ticket_panels (
-                    guild_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS onyx_mod_notes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL, moderator_id INTEGER NOT NULL,
-                    note TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE TABLE IF NOT EXISTS onyx_security_settings (
-                    guild_id INTEGER PRIMARY KEY, alert_channel_id INTEGER NOT NULL,
-                    enabled INTEGER NOT NULL DEFAULT 1
-                );
-                CREATE TABLE IF NOT EXISTS onyx_temp_voice_rooms (
-                    guild_id INTEGER NOT NULL, channel_id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL
-                );
+                CREATE TABLE IF NOT EXISTS onyx_autoresponses (guild_id INTEGER NOT NULL, trigger TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY (guild_id, trigger));
+                CREATE TABLE IF NOT EXISTS onyx_antiraid (guild_id INTEGER PRIMARY KEY, join_count INTEGER NOT NULL, window_seconds INTEGER NOT NULL, alert_channel_id INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
+                CREATE TABLE IF NOT EXISTS onyx_voicemaster (guild_id INTEGER PRIMARY KEY, trigger_channel_id INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS onyx_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL UNIQUE, opener_id BIGINT NOT NULL, claimed_by BIGINT, status TEXT NOT NULL DEFAULT 'open', created_at TEXT DEFAULT CURRENT_TIMESTAMP, closed_at TEXT);
+                CREATE TABLE IF NOT EXISTS onyx_ticket_panels (guild_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS onyx_mod_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, moderator_id INTEGER NOT NULL, note TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+                CREATE TABLE IF NOT EXISTS onyx_security_settings (guild_id INTEGER PRIMARY KEY, alert_channel_id INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
+                CREATE TABLE IF NOT EXISTS onyx_temp_voice_rooms (guild_id INTEGER NOT NULL, channel_id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS onyx_antinuke_settings (guild_id INTEGER PRIMARY KEY, threshold INTEGER NOT NULL DEFAULT 3, window_seconds INTEGER NOT NULL DEFAULT 10, punishment TEXT NOT NULL DEFAULT 'none', log_channel_id INTEGER, jail_role_id INTEGER, enabled INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS onyx_antinuke_whitelist (guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY (guild_id,user_id));
+                CREATE TABLE IF NOT EXISTS onyx_antinuke_staff_roles (guild_id INTEGER NOT NULL, role_id INTEGER NOT NULL, PRIMARY KEY (guild_id,role_id));
+                CREATE TABLE IF NOT EXISTS onyx_antinuke_events (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, actor_id INTEGER NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL, punishment TEXT NOT NULL DEFAULT 'pending', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
             """)
             await self.conn.commit()
 
@@ -172,6 +126,10 @@ class Database:
             q = self._postgres_query(query)
             async with self._connection_lock:
                 if query.lstrip().upper().startswith("INSERT INTO MOD_CASES"):
+                    q = q.rstrip().rstrip(";") + " RETURNING id"
+                    new_id = await self.conn.fetchval(q, *params)
+                    return ExecuteResult(lastrowid=new_id)
+                if query.lstrip().upper().startswith("INSERT INTO ONYX_ANTINUKE_EVENTS"):
                     q = q.rstrip().rstrip(";") + " RETURNING id"
                     new_id = await self.conn.fetchval(q, *params)
                     return ExecuteResult(lastrowid=new_id)
