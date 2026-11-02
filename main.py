@@ -350,7 +350,10 @@ HELP_CATEGORIES = {
     ],
 
     "Logging": [
-        ("logging_set", ",logging set #channel", "Choose the moderation log channel.")
+    ("logging_set", ",logging set #channel", "Set the server's logging destination."),
+    ("logging_remove", ",logging remove [#channel]", "Remove the configured logging destination."),
+    ("logging_list", ",logging list", "Show the current logging destination."),
+    ("logging_test", ",logging test", "Send a test log."),
     ],
 
     "Utility": [
