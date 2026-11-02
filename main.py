@@ -26,6 +26,9 @@ intents.members = True
 intents.message_content = True
 intents.guilds = True
 intents.moderation = True
+intents.voice_states = True
+intents.invites = True
+intents.emojis_and_stickers = True
 
 
 async def get_prefix(bot, message):
