@@ -23,20 +23,20 @@ class MemberTools(commands.Cog):
         if not self.deleted[ctx.channel.id]:
             return await ctx.send("No deleted message is saved for this channel.")
         author, content = self.deleted[ctx.channel.id][-1]
-        embed = discord.Embed(title="Recently deleted message", description=content[:4000], color=discord.Color.dark_grey())
-        embed.set_footer(text=f"Author: {author}")
-        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        e = discord.Embed(title="Recently deleted message", description=content[:4000], color=discord.Color.dark_grey())
+        e.set_footer(text=f"Author: {author}")
+        await ctx.send(embed=e, allowed_mentions=discord.AllowedMentions.none())
 
     @commands.command(name="editsnipe", help="Show the most recently edited message in this channel.")
     async def editsnipe(self, ctx):
         if not self.edited[ctx.channel.id]:
             return await ctx.send("No edited message is saved for this channel.")
         author, before, after = self.edited[ctx.channel.id][-1]
-        embed = discord.Embed(title="Recently edited message", color=discord.Color.orange())
-        embed.add_field(name="Before", value=before[:1024], inline=False)
-        embed.add_field(name="After", value=after[:1024], inline=False)
-        embed.set_footer(text=f"Author: {author}")
-        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        e = discord.Embed(title="Recently edited message", color=discord.Color.orange())
+        e.add_field(name="Before", value=before[:1024], inline=False)
+        e.add_field(name="After", value=after[:1024], inline=False)
+        e.set_footer(text=f"Author: {author}")
+        await ctx.send(embed=e, allowed_mentions=discord.AllowedMentions.none())
 
     @commands.command(name="roleinfo", help="Show information about a server role.")
     async def roleinfo(self, ctx, *, role: discord.Role):
