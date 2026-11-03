@@ -197,23 +197,33 @@ class ServerBackup(commands.Cog):
 
         skipped = result["skipped_items"]
         report = (
-            f"**ONYX restore finished** for backup `{backup_id}`.\\n"
+            f"**ONYX restore finished** for backup `{backup_id}`.\n"
             f"Created: {result['roles']} roles, {result['channels']} channels, "
-            f"{result['emojis']} emojis.\\n"
-            f"Deleted old channels/categories: {result['deleted_channels']}.\\n"
-            f"Skipped: {len(skipped)} items."
+            f"{result['emojis']} emojis.\n"
+            f"Deleted old channels/categories: {result['deleted_channels']}.\n"
+            f"Skipped or converted: {len(skipped)} items."
         )
         if skipped:
-            report += "\\n\\n**Skipped items:**\\n" + "\\n".join(
-                f"• {item}" for item in skipped[:35]
+            report += "\n\n**Skipped items / fallbacks:**\n" + "\n".join(
+                f"• {item}" for item in skipped
             )
-            if len(skipped) > 35:
-                report += f"\\n• ...and {len(skipped) - 35} more; see Render logs."
         else:
-            report += "\\n\\nNo items were skipped."
+            report += "\n\nNo items were skipped or converted."
+
+        # Discord limits each message to 2,000 characters; split long reports safely.
+        chunks = []
+        current = ""
+        for line in report.splitlines(keepends=True):
+            if len(current) + len(line) > 1800 and current:
+                chunks.append(current)
+                current = ""
+            current += line
+        if current:
+            chunks.append(current)
 
         try:
-            await ctx.author.send(report)
+            for chunk in chunks:
+                await ctx.author.send(chunk)
         except discord.HTTPException:
             log.exception("Could not DM restore report")
             log.warning("Restore report for %s: %s", backup_id, report)
@@ -301,8 +311,8 @@ class ServerBackup(commands.Cog):
                 "overwrites": await get_overwrites(item),
                 "reason": "ONYX backup restore"
             }
+            kind = item["type"]
             try:
-                kind = item["type"]
                 if kind == "text":
                     channel = await guild.create_text_channel(
                         item["name"], topic=item.get("topic"),
@@ -310,9 +320,34 @@ class ServerBackup(commands.Cog):
                         slowmode_delay=item.get("slowmode_delay", 0), **common
                     )
                 elif kind == "news":
-                    channel = await guild.create_text_channel(
-                        item["name"], news=True, **common
-                    )
+                    try:
+                        channel = await guild.create_text_channel(
+                            item["name"], news=True,
+                            topic=item.get("topic"),
+                            nsfw=item.get("nsfw", False),
+                            slowmode_delay=item.get("slowmode_delay", 0),
+                            **common
+                        )
+                    except discord.HTTPException as news_error:
+                        # Discord rejects announcement channel type 5 when the
+                        # destination server is not configured for Community.
+                        if getattr(news_error, "code", None) != 50035:
+                            raise
+                        log.warning(
+                            "Announcement channel %s could not be created as news; "
+                            "retrying as a regular text channel.",
+                            item["name"]
+                        )
+                        channel = await guild.create_text_channel(
+                            item["name"], topic=item.get("topic"),
+                            nsfw=item.get("nsfw", False),
+                            slowmode_delay=item.get("slowmode_delay", 0),
+                            **common
+                        )
+                        result["skipped_items"].append(
+                            f"#{item['name']}: restored as a regular text channel; "
+                            "Discord rejected announcement-channel creation (destination Community setup may be disabled)."
+                        )
                 elif kind == "voice":
                     channel = await guild.create_voice_channel(
                         item["name"], bitrate=item.get("bitrate"),
