@@ -267,6 +267,29 @@ class ServerBackup(commands.Cog):
                     continue
             role_map[int(item["id"])] = role
 
+        # Reapply the saved role hierarchy after all roles have been created/reused.
+        # Discord role positions are guild-wide, so use the saved relative order
+        # and assign sequential positions from lowest to highest.
+        saved_roles = sorted(data["roles"], key=lambda x: x.get("position", 0))
+        role_positions = {}
+        for index, item in enumerate(saved_roles, start=1):
+            restored_role = role_map.get(int(item["id"]))
+            if restored_role is not None and not restored_role.is_default() and not restored_role.managed:
+                role_positions[restored_role] = index
+
+        if role_positions:
+            try:
+                await guild.edit_role_positions(
+                    positions=role_positions,
+                    reason="ONYX backup restore: preserve original role hierarchy"
+                )
+            except (discord.HTTPException, TypeError):
+                log.exception("Could not restore original role hierarchy")
+                result["skipped_items"].append(
+                    "Role order could not be fully restored. Check that ONYX's highest role "
+                    "is above the roles being restored, then review Render logs."
+                )
+
         async def get_overwrites(item):
             overwrites = {}
             for entry in item.get("overwrites", []):
