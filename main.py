@@ -448,6 +448,7 @@ COG_LABELS = {
 }
 
 COMMANDS_PER_PAGE = 4
+GROUP_OPTIONS_PER_PAGE = 25
 
 
 def get_help_categories():
@@ -485,6 +486,20 @@ def _command_usage(prefix, command):
         usage += f" {command.signature}"
 
     return usage
+
+
+def _command_detail_embed(prefix, command):
+    embed = discord.Embed(
+        title=f"ONYX • {command.qualified_name}",
+        description=(
+            f"**Usage:** `{_command_usage(prefix, command)}`\n"
+            f"**Description:** "
+            f"{command.help or command.brief or 'No description available.'}"
+        ),
+        color=discord.Color.from_rgb(44, 38, 67)
+    )
+    embed.set_footer(text="ONYX • Prefix Commands Only")
+    return embed
 
 
 def _help_embed(prefix, category=None, page=0):
@@ -548,7 +563,54 @@ def _help_embed(prefix, category=None, page=0):
         )
 
     embed.set_footer(text="ONYX • Prefix Commands Only")
+    return embed
 
+
+def _visible_group_commands(group):
+    return sorted(
+        (child for child in group.walk_commands() if not child.hidden),
+        key=lambda child: child.qualified_name.casefold()
+    )
+
+
+def _group_help_embed(prefix, group, page=0, selected=None):
+    if selected is not None:
+        embed = _command_detail_embed(prefix, selected)
+        embed.description += (
+            f"\n\nSelect another **{group.qualified_name}** command below "
+            "to view its details."
+        )
+        return embed
+
+    children = _visible_group_commands(group)
+    total_pages = max(
+        1,
+        (len(children) + GROUP_OPTIONS_PER_PAGE - 1) // GROUP_OPTIONS_PER_PAGE
+    )
+    page = max(0, min(page, total_pages - 1))
+    page_items = children[
+        page * GROUP_OPTIONS_PER_PAGE:
+        (page + 1) * GROUP_OPTIONS_PER_PAGE
+    ]
+
+    lines = [
+        f"`{_command_usage(prefix, child)}` — "
+        f"{(child.short_doc or child.brief or 'No description available.')[:120]}"
+        for child in page_items
+    ]
+
+    embed = discord.Embed(
+        title=f"ONYX • {group.qualified_name.title()} Commands",
+        description=(
+            "Choose any command from the dropdown to see its full usage "
+            "and description.\n\n"
+            + ("\n".join(lines) if lines else "This group has no visible subcommands.")
+        ),
+        color=discord.Color.from_rgb(44, 38, 67)
+    )
+    embed.set_footer(
+        text=f"{len(children)} commands • Page {page + 1}/{total_pages} • ONYX Help"
+    )
     return embed
 
 
@@ -559,7 +621,6 @@ def _help_embed(prefix, category=None, page=0):
 class HelpCategorySelect(discord.ui.Select):
     def __init__(self, view):
         self.help_view = view
-
         categories = get_help_categories()
 
         options = [
@@ -582,7 +643,6 @@ class HelpCategorySelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         self.help_view.category = self.values[0]
         self.help_view.page = 0
-
         self.help_view.refresh_pagination_controls()
 
         await interaction.response.edit_message(
@@ -628,18 +688,11 @@ class OnyxHelpView(discord.ui.View):
 
         self.previous_button.callback = self._previous_page
         self.next_button.callback = self._next_page
-
         self._pagination_added = False
 
     def _page_count(self):
-        count = len(
-            get_help_categories().get(self.category, [])
-        )
-
-        return max(
-            1,
-            (count + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE
-        )
+        count = len(get_help_categories().get(self.category, []))
+        return max(1, (count + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
 
     def refresh_pagination_controls(self):
         total_pages = self._page_count()
@@ -648,7 +701,6 @@ class OnyxHelpView(discord.ui.View):
             self.add_item(self.previous_button)
             self.add_item(self.next_button)
             self._pagination_added = True
-
         elif total_pages <= 1 and self._pagination_added:
             self.remove_item(self.previous_button)
             self.remove_item(self.next_button)
@@ -656,9 +708,7 @@ class OnyxHelpView(discord.ui.View):
 
         if self._pagination_added:
             self.previous_button.disabled = self.page <= 0
-            self.next_button.disabled = (
-                self.page >= total_pages - 1
-            )
+            self.next_button.disabled = self.page >= total_pages - 1
 
     async def _change_page(self, interaction, direction):
         total_pages = self._page_count()
@@ -671,11 +721,7 @@ class OnyxHelpView(discord.ui.View):
         self.refresh_pagination_controls()
 
         await interaction.response.edit_message(
-            embed=_help_embed(
-                self.prefix,
-                self.category,
-                self.page
-            ),
+            embed=_help_embed(self.prefix, self.category, self.page),
             view=self
         )
 
@@ -692,9 +738,153 @@ class OnyxHelpView(discord.ui.View):
                 "Use `,help` to open your own.",
                 ephemeral=True
             )
-
             return False
+        return True
 
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+class GroupCommandSelect(discord.ui.Select):
+    def __init__(self, view):
+        self.group_view = view
+        options = self.group_view.get_options()
+
+        super().__init__(
+            placeholder="Choose a command to view its details...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = bot.get_command(self.values[0])
+
+        if selected is None or selected.hidden:
+            return await interaction.response.send_message(
+                "That command is no longer available.",
+                ephemeral=True
+            )
+
+        self.group_view.selected = selected
+        await interaction.response.edit_message(
+            embed=_group_help_embed(
+                self.group_view.prefix,
+                self.group_view.group,
+                self.group_view.page,
+                selected
+            ),
+            view=self.group_view
+        )
+
+
+class GroupHelpView(discord.ui.View):
+    def __init__(self, prefix, author_id, group):
+        super().__init__(timeout=180)
+        self.prefix = prefix
+        self.author_id = author_id
+        self.group = group
+        self.page = 0
+        self.selected = None
+        self.commands = _visible_group_commands(group)
+
+        self.command_select = GroupCommandSelect(self)
+        self.add_item(self.command_select)
+
+        self.previous_button = discord.ui.Button(
+            label="Previous commands",
+            style=discord.ButtonStyle.secondary,
+            emoji="◀️",
+            row=1,
+            disabled=True
+        )
+        self.next_button = discord.ui.Button(
+            label="More commands",
+            style=discord.ButtonStyle.secondary,
+            emoji="▶️",
+            row=1
+        )
+        self.previous_button.callback = self._previous_page
+        self.next_button.callback = self._next_page
+        self._pagination_added = False
+        self.refresh_controls()
+
+    def get_options(self):
+        start = self.page * GROUP_OPTIONS_PER_PAGE
+        page_commands = self.commands[start:start + GROUP_OPTIONS_PER_PAGE]
+
+        return [
+            discord.SelectOption(
+                label=child.qualified_name[:100],
+                description=(child.short_doc or child.brief or "View command details")[:100],
+                value=child.qualified_name
+            )
+            for child in page_commands
+        ] or [
+            discord.SelectOption(
+                label="No visible subcommands",
+                value=self.group.qualified_name,
+                description="This group has no visible subcommands."
+            )
+        ]
+
+    def refresh_controls(self):
+        total_pages = max(
+            1,
+            (len(self.commands) + GROUP_OPTIONS_PER_PAGE - 1) // GROUP_OPTIONS_PER_PAGE
+        )
+
+        if total_pages > 1 and not self._pagination_added:
+            self.add_item(self.previous_button)
+            self.add_item(self.next_button)
+            self._pagination_added = True
+        elif total_pages <= 1 and self._pagination_added:
+            self.remove_item(self.previous_button)
+            self.remove_item(self.next_button)
+            self._pagination_added = False
+
+        if self._pagination_added:
+            self.previous_button.disabled = self.page <= 0
+            self.next_button.disabled = self.page >= total_pages - 1
+
+    async def change_page(self, interaction, direction):
+        total_pages = max(
+            1,
+            (len(self.commands) + GROUP_OPTIONS_PER_PAGE - 1) // GROUP_OPTIONS_PER_PAGE
+        )
+        new_page = self.page + direction
+
+        if not 0 <= new_page < total_pages:
+            return await interaction.response.defer()
+
+        self.page = new_page
+        self.selected = None
+        self.remove_item(self.command_select)
+        self.command_select = GroupCommandSelect(self)
+        self.add_item(self.command_select)
+        self.refresh_controls()
+
+        await interaction.response.edit_message(
+            embed=_group_help_embed(self.prefix, self.group, self.page),
+            view=self
+        )
+
+    async def _previous_page(self, interaction):
+        await self.change_page(interaction, -1)
+
+    async def _next_page(self, interaction):
+        await self.change_page(interaction, 1)
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "This help menu belongs to the person who opened it. "
+                "Use `,help` to open your own.",
+                ephemeral=True
+            )
+            return False
         return True
 
     async def on_timeout(self):
@@ -712,21 +902,15 @@ async def _send_help(ctx, command_query=None):
     if command_query:
         query = command_query.strip().casefold()
 
-        command = bot.get_command(
-            query.replace(" ", "_")
-        )
+        command = bot.get_command(query.replace(" ", "_"))
 
         if command is None:
             command = bot.get_command(query)
 
         if command is None:
             for command_path, shortcuts in COMMAND_ALIASES.items():
-                if query in {
-                    shortcut.casefold()
-                    for shortcut in shortcuts
-                }:
+                if query in {shortcut.casefold() for shortcut in shortcuts}:
                     command = bot.get_command(command_path)
-
                     if command is not None:
                         break
 
@@ -736,28 +920,19 @@ async def _send_help(ctx, command_query=None):
                 f"Use `{prefix}help` to browse commands."
             )
 
-        embed = discord.Embed(
-            title=f"ONYX • {command.qualified_name}",
-            description=(
-                f"**Usage:** `{_command_usage(prefix, command)}`\n"
-                f"**Description:** "
-                f"{command.help or command.brief or 'No description available.'}"
-            ),
-            color=discord.Color.from_rgb(44, 38, 67)
-        )
+        if isinstance(command, commands.Group):
+            children = _visible_group_commands(command)
+            if children:
+                view = GroupHelpView(prefix, ctx.author.id, command)
+                return await ctx.send(
+                    embed=_group_help_embed(prefix, command),
+                    view=view
+                )
 
-        embed.set_footer(
-            text="ONYX • Prefix Commands Only"
-        )
-
-        return await ctx.send(embed=embed)
+        return await ctx.send(embed=_command_detail_embed(prefix, command))
 
     view = OnyxHelpView(prefix, ctx.author.id)
-
-    await ctx.send(
-        embed=_help_embed(prefix),
-        view=view
-    )
+    await ctx.send(embed=_help_embed(prefix), view=view)
 
 
 # =========================================================
@@ -786,25 +961,13 @@ async def owner_help(ctx):
     )
 
     if not hidden_commands:
-        return await ctx.send(
-            "No hidden commands are currently loaded."
-        )
+        return await ctx.send("No hidden commands are currently loaded.")
 
     lines = []
-
     for command in hidden_commands:
         usage = _command_usage(ctx.prefix, command)
-
-        description = (
-            command.help
-            or command.brief
-            or "No description available."
-        )
-
-        lines.append(
-            f"`{usage}`\n"
-            f"{description[:160]}"
-        )
+        description = command.help or command.brief or "No description available."
+        lines.append(f"`{usage}`\n{description[:160]}")
 
     pages = []
     current = []
@@ -812,12 +975,10 @@ async def owner_help(ctx):
 
     for line in lines:
         line_length = len(line) + 2
-
         if current and current_length + line_length > 3800:
             pages.append(current)
             current = []
             current_length = 0
-
         current.append(line)
         current_length += line_length
 
@@ -830,14 +991,12 @@ async def owner_help(ctx):
             description="\n\n".join(page_lines),
             color=discord.Color.from_rgb(44, 38, 67)
         )
-
         embed.set_footer(
             text=(
                 f"Owner only • {len(hidden_commands)} hidden commands "
                 f"• Page {index}/{len(pages)}"
             )
         )
-
         await ctx.send(embed=embed)
 
 
