@@ -324,6 +324,11 @@ class Giveaways(commands.Cog):
             "message_id BIGINT NOT NULL, guild_id BIGINT NOT NULL, "
             "user_id BIGINT NOT NULL, PRIMARY KEY(message_id,user_id))"
         )
+        await self.bot.db.execute(
+            "CREATE TABLE IF NOT EXISTS onyx_giveaway_winners ("
+            "message_id BIGINT NOT NULL, user_id BIGINT NOT NULL, "
+            "selected_at BIGINT NOT NULL, PRIMARY KEY(message_id,user_id))"
+        )
         self.bot.giveaway_entry_view = self.entry_view
         self.bot.add_view(self.entry_view)
 
@@ -361,6 +366,107 @@ class Giveaways(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none()
         )
 
+    @commands.command(
+        name="reroll",
+        help="Pick a new winner for an ended giveaway. Usage: ,reroll <message_id>"
+    )
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    async def reroll(self, ctx, message_id: int = None):
+        if message_id is None and ctx.message.reference:
+            message_id = ctx.message.reference.message_id
+        if message_id is None:
+            return await ctx.reply(
+                "Give me the giveaway message ID: `,reroll <message_id>` "
+                "or reply to the giveaway message with `,reroll`.",
+                mention_author=False
+            )
+
+        row = await self.bot.db.fetchone(
+            "SELECT guild_id, channel_id, message_id, prize, ended "
+            "FROM onyx_giveaways WHERE message_id=? AND guild_id=?",
+            (message_id, ctx.guild.id)
+        )
+        if not row:
+            return await ctx.reply(
+                "I couldn't find that giveaway in this server.",
+                mention_author=False
+            )
+        if not row["ended"]:
+            return await ctx.reply(
+                "That giveaway is still running. You can reroll after it ends.",
+                mention_author=False
+            )
+
+        entries = await self.bot.db.fetchall(
+            "SELECT user_id FROM onyx_giveaway_entries WHERE message_id=?",
+            (message_id,)
+        )
+        if not entries:
+            return await ctx.reply(
+                "That giveaway had no entries, so there's nobody to reroll.",
+                mention_author=False
+            )
+
+        previous = await self.bot.db.fetchall(
+            "SELECT user_id FROM onyx_giveaway_winners WHERE message_id=?",
+            (message_id,)
+        )
+        previous_ids = {item["user_id"] for item in previous}
+        eligible = [item["user_id"] for item in entries if item["user_id"] not in previous_ids]
+        if not eligible:
+            return await ctx.reply(
+                "Everyone who entered has already been selected. There are no new entrants to reroll.",
+                mention_author=False
+            )
+
+        winner_id = random.choice(eligible)
+        await self.bot.db.execute(
+            "INSERT INTO onyx_giveaway_winners (message_id, user_id, selected_at) "
+            "VALUES (?,?,?) ON CONFLICT(message_id,user_id) DO NOTHING",
+            (message_id, winner_id, int(time.time()))
+        )
+
+        channel = ctx.guild.get_channel(row["channel_id"])
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(row["channel_id"])
+            except discord.HTTPException:
+                channel = None
+        if channel is None:
+            return await ctx.reply(
+                "I selected a new winner, but I couldn't access the original giveaway channel.",
+                mention_author=False
+            )
+
+        try:
+            giveaway_message = await channel.fetch_message(message_id)
+            embed = giveaway_message.embeds[0].copy() if giveaway_message.embeds else discord.Embed(
+                title="🎉 ONYX GIVEAWAY",
+                description=f"**Prize**\\n{row['prize']}",
+                color=ACCENT
+            )
+            embed.add_field(
+                name="🔄 Reroll winner",
+                value=f"<@{winner_id}>",
+                inline=False
+            )
+            await giveaway_message.edit(embed=embed)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            # The winner is still recorded; announce them in the command channel.
+            pass
+
+        await channel.send(
+            f"🔄 **Giveaway reroll!** Congratulations <@{winner_id}>! "
+            f"You won **{row['prize']}**!",
+            allowed_mentions=discord.AllowedMentions(users=True)
+        )
+        await ctx.reply(
+            f"Picked a new winner: <@{winner_id}>",
+            mention_author=False,
+            allowed_mentions=discord.AllowedMentions(users=True)
+        )
+
     @tasks.loop(seconds=15)
     async def finish_due(self):
         now = int(time.time())
@@ -381,6 +487,12 @@ class Giveaways(commands.Cog):
             )
             entrants = [entry["user_id"] for entry in entries]
             winners = random.sample(entrants, min(row["winner_count"], len(entrants))) if entrants else []
+            for winner_id in winners:
+                await self.bot.db.execute(
+                    "INSERT INTO onyx_giveaway_winners (message_id, user_id, selected_at) "
+                    "VALUES (?,?,?) ON CONFLICT(message_id,user_id) DO NOTHING",
+                    (row["message_id"], winner_id, now)
+                )
 
             guild = self.bot.get_guild(row["guild_id"])
             channel = guild.get_channel(row["channel_id"]) if guild else None
