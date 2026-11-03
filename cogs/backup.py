@@ -267,27 +267,53 @@ class ServerBackup(commands.Cog):
                     continue
             role_map[int(item["id"])] = role
 
-        # Reapply the saved role hierarchy after all roles have been created/reused.
-        # Discord role positions are guild-wide, so use the saved relative order
-        # and assign sequential positions from lowest to highest.
+        # Restore the relative order using the position slots currently occupied
+        # by the recreated roles. This avoids assigning arbitrary positions (1..N),
+        # which can collide with @everyone, ONYX's bot role, or managed roles.
         saved_roles = sorted(data["roles"], key=lambda x: x.get("position", 0))
-        role_positions = {}
-        for index, item in enumerate(saved_roles, start=1):
-            restored_role = role_map.get(int(item["id"]))
-            if restored_role is not None and not restored_role.is_default() and not restored_role.managed:
-                role_positions[restored_role] = index
+        ordered_roles = [
+            role_map[int(item["id"])]
+            for item in saved_roles
+            if int(item["id"]) in role_map
+            and not role_map[int(item["id"])].is_default()
+            and not role_map[int(item["id"])].managed
+        ]
 
-        if role_positions:
+        if ordered_roles:
             try:
+                # Discord role positions are relative to every role in the guild.
+                # Reuse the slots belonging to the roles ONYX is allowed to move.
+                current_slots = sorted(role.position for role in ordered_roles)
+                role_positions = {
+                    role: slot for role, slot in zip(ordered_roles, current_slots)
+                }
                 await guild.edit_role_positions(
                     positions=role_positions,
-                    reason="ONYX backup restore: preserve original role hierarchy"
+                    reason="ONYX backup restore: preserve saved role order"
                 )
+
+                # Verify the final order from Discord rather than assuming the
+                # bulk edit produced the requested hierarchy.
+                refreshed_roles = await guild.fetch_roles()
+                refreshed_ids = [
+                    role.id for role in sorted(refreshed_roles, key=lambda r: r.position)
+                    if role.id in {item.id for item in ordered_roles}
+                ]
+                expected_ids = [role.id for role in ordered_roles]
+                if refreshed_ids != expected_ids:
+                    log.error(
+                        "Role order verification failed. Expected %s, received %s",
+                        expected_ids, refreshed_ids
+                    )
+                    result["skipped_items"].append(
+                        "Discord did not retain the requested role order. Check ONYX's "
+                        "highest role position and compare the Render logs."
+                    )
             except (discord.HTTPException, TypeError):
                 log.exception("Could not restore original role hierarchy")
                 result["skipped_items"].append(
-                    "Role order could not be fully restored. Check that ONYX's highest role "
-                    "is above the roles being restored, then review Render logs."
+                    "Role order could not be restored. Make sure ONYX's highest role "
+                    "is above all restored roles, then check Render logs."
                 )
 
         async def get_overwrites(item):
