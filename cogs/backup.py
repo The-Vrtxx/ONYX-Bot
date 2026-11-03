@@ -131,7 +131,7 @@ class ServerBackup(commands.Cog):
         try:
             await ctx.author.send(
                 f"ONYX backup saved for **{discord.utils.escape_markdown(guild.name)}**.\n"
-                f"Your unique Backup ID:\n{backup_id}\n\n"
+                f"Your unique Backup ID (tap the code block to copy):\n```\n{backup_id}\n```\n"
                 f"Saved {len(roles)} roles, {len(channels)} channels, and {len(emojis)} emojis.\n\n"
                 "No JSON file is needed. Your backup is stored in ONYX's database.\n"
                 "Create your new server, invite ONYX with Administrator permission, then run:\n"
@@ -175,8 +175,9 @@ class ServerBackup(commands.Cog):
             return await ctx.send("This backup format isn't supported by this version of ONYX.")
 
         await ctx.send(
-            f"Verified backup {backup_id}. This will create missing roles, channels, and emojis "
-            "in this server without deleting existing content. Reply `confirm` within 30 seconds."
+            f"Verified backup {backup_id}. **DESTRUCTIVE REBUILD:** ONYX will delete "
+            "every existing channel and category in this server, then recreate the saved layout. "
+            "Roles will not be deleted. Reply `confirm` within 30 seconds to continue."
         )
 
         def check(message):
@@ -191,16 +192,51 @@ class ServerBackup(commands.Cog):
         except TimeoutError:
             return await ctx.send("Restore cancelled; confirmation timed out.")
 
-        await ctx.send("Restoring your server structure...")
+        await ctx.send("Confirmation received. Starting the full channel rebuild...")
         result = await self.restore_into_guild(ctx.guild, data)
-        await ctx.send(
-            f"Restore finished. Created {result['roles']} roles, {result['channels']} channels, "
-            f"and {result['emojis']} emojis. Skipped {result['skipped']} items."
+
+        skipped = result["skipped_items"]
+        report = (
+            f"**ONYX restore finished** for backup `{backup_id}`.\\n"
+            f"Created: {result['roles']} roles, {result['channels']} channels, "
+            f"{result['emojis']} emojis.\\n"
+            f"Deleted old channels/categories: {result['deleted_channels']}.\\n"
+            f"Skipped: {len(skipped)} items."
         )
+        if skipped:
+            report += "\\n\\n**Skipped items:**\\n" + "\\n".join(
+                f"• {item}" for item in skipped[:35]
+            )
+            if len(skipped) > 35:
+                report += f"\\n• ...and {len(skipped) - 35} more; see Render logs."
+        else:
+            report += "\\n\\nNo items were skipped."
+
+        try:
+            await ctx.author.send(report)
+        except discord.HTTPException:
+            log.exception("Could not DM restore report")
+            log.warning("Restore report for %s: %s", backup_id, report)
 
     async def restore_into_guild(self, guild, data):
-        result = {"roles": 0, "channels": 0, "emojis": 0, "skipped": 0}
+        result = {
+            "roles": 0, "channels": 0, "emojis": 0,
+            "deleted_channels": 0, "skipped_items": []
+        }
         role_map = {}
+
+        # Delete all existing channels first; child channels before categories.
+        old_channels = list(guild.channels)
+        old_channels.sort(key=lambda channel: isinstance(channel, discord.CategoryChannel))
+        for old_channel in old_channels:
+            try:
+                await old_channel.delete(reason="ONYX backup restore: clean rebuild")
+                result["deleted_channels"] += 1
+            except discord.HTTPException as exc:
+                log.exception("Could not delete old channel %s", old_channel.id)
+                result["skipped_items"].append(
+                    f"Could not delete #{old_channel.name} ({old_channel.id}): {exc}"
+                )
 
         for item in sorted(data["roles"], key=lambda x: x.get("position", 0)):
             role = discord.utils.get(guild.roles, name=item["name"])
@@ -217,7 +253,7 @@ class ServerBackup(commands.Cog):
                     result["roles"] += 1
                 except discord.HTTPException:
                     log.exception("Could not create role %s", item["name"])
-                    result["skipped"] += 1
+                    result["skipped_items"].append(f"Role '{item['name']}': creation failed; see Render logs.")
                     continue
             role_map[int(item["id"])] = role
 
@@ -249,7 +285,7 @@ class ServerBackup(commands.Cog):
                     result["channels"] += 1
                 except discord.HTTPException:
                     log.exception("Could not create category %s", item["name"])
-                    result["skipped"] += 1
+                    result["skipped_items"].append(f"Category '{item['name']}': creation failed; see Render logs.")
                     continue
             channel_map[int(item["id"])] = category
 
@@ -294,13 +330,13 @@ class ServerBackup(commands.Cog):
                         slowmode_delay=item.get("slowmode_delay", 0), **common
                     )
                 else:
-                    result["skipped"] += 1
+                    result["skipped_items"].append(f"Channel '{item['name']}' (type {item['type']}): unsupported.")
                     continue
                 channel_map[int(item["id"])] = channel
                 result["channels"] += 1
             except (discord.HTTPException, TypeError):
                 log.exception("Could not create channel %s", item["name"])
-                result["skipped"] += 1
+                result["skipped_items"].append(f"Channel '{item['name']}': creation failed; see Render logs.")
 
         # Reapply original order after all channels exist, separately for each category.
         position_groups = {}
@@ -321,7 +357,7 @@ class ServerBackup(commands.Cog):
                     )
                 except discord.HTTPException:
                     log.exception("Could not set channel position for %s", channel.id)
-                    result["skipped"] += 1
+                    result["skipped_items"].append(f"Channel '{channel.name}': original position could not be applied.")
 
         # Restore saved server-level settings where Discord permits it.
         gd = data.get("guild", {})
@@ -338,7 +374,7 @@ class ServerBackup(commands.Cog):
             await guild.edit(reason="ONYX backup restore", **edit)
         except (discord.HTTPException, TypeError, ValueError):
             log.exception("Some guild settings could not be restored")
-            result["skipped"] += 1
+            result["skipped_items"].append("Some server-level settings could not be restored; see Render logs.")
 
         for item in data.get("emojis", []):
             if discord.utils.get(guild.emojis, name=item["name"]):
@@ -352,7 +388,7 @@ class ServerBackup(commands.Cog):
                 result["emojis"] += 1
             except (discord.HTTPException, ValueError, KeyError):
                 log.exception("Could not restore emoji %s", item.get("name"))
-                result["skipped"] += 1
+                result["skipped_items"].append(f"Emoji '{item.get('name', 'unknown')}': creation failed; see Render logs.")
 
         for user_id, old_role_ids in data.get("member_roles", {}).items():
             member = guild.get_member(int(user_id))
@@ -367,7 +403,7 @@ class ServerBackup(commands.Cog):
                     await member.add_roles(*add_roles, reason="ONYX backup restore")
                 except discord.HTTPException:
                     log.exception("Could not restore member roles for %s", user_id)
-                    result["skipped"] += 1
+                    result["skipped_items"].append(f"Member {user_id}: one or more roles could not be assigned.")
 
         return result
 
