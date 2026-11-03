@@ -712,7 +712,6 @@ async def _send_help(ctx, command_query=None):
     if command_query:
         query = command_query.strip().casefold()
 
-        # Resolve regular command names and Discord.py aliases first.
         command = bot.get_command(
             query.replace(" ", "_")
         )
@@ -720,7 +719,6 @@ async def _send_help(ctx, command_query=None):
         if command is None:
             command = bot.get_command(query)
 
-        # Resolve shortcuts from cogs/aliases.py.
         if command is None:
             for command_path, shortcuts in COMMAND_ALIASES.items():
                 if query in {
@@ -732,7 +730,6 @@ async def _send_help(ctx, command_query=None):
                     if command is not None:
                         break
 
-        # Never reveal hidden commands through public help.
         if command is None or command.hidden:
             return await ctx.send(
                 f"I couldn't find `{command_query}`. "
@@ -774,12 +771,16 @@ async def _send_help(ctx, command_query=None):
 )
 @commands.is_owner()
 async def owner_help(ctx):
-    """Show all currently loaded hidden commands. Bot owner only."""
+    """Show all loaded hidden commands and the server access command tree."""
 
     hidden_commands = sorted(
         (
             command for command in bot.walk_commands()
-            if command.hidden
+            if (
+                command.hidden
+                or command.qualified_name == "access"
+                or command.qualified_name.startswith("access ")
+            )
         ),
         key=lambda command: command.qualified_name.casefold()
     )
@@ -805,7 +806,6 @@ async def owner_help(ctx):
             f"{description[:160]}"
         )
 
-    # Split long directories across multiple embeds.
     pages = []
     current = []
     current_length = 0
