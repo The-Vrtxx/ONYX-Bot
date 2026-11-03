@@ -34,7 +34,6 @@ intents.emojis_and_stickers = True
 
 async def get_prefix(bot, message):
     prefix = ","
-
     if message.guild is not None and getattr(bot, "db", None) is not None:
         try:
             row = await bot.db.fetchone(
@@ -48,7 +47,6 @@ async def get_prefix(bot, message):
                 "Could not load prefix for guild %s; using default",
                 message.guild.id
             )
-
     return commands.when_mentioned_or(prefix)(bot, message)
 
 
@@ -59,7 +57,6 @@ class CommunityBot(commands.Bot):
             intents=intents,
             help_command=None
         )
-
         self.db = Database(DB_PATH, DATABASE_URL)
         self.owner_id = OWNER_ID
         self.started_at = discord.utils.utcnow()
@@ -82,11 +79,9 @@ class CommunityBot(commands.Bot):
 
         loaded = []
         failed = []
-
         for path in sorted(Path("cogs").glob("*.py")):
             if path.name.startswith("_"):
                 continue
-
             extension = f"cogs.{path.stem}"
             try:
                 await self.load_extension(extension)
@@ -102,7 +97,6 @@ class CommunityBot(commands.Bot):
 
         self.tree.clear_commands(guild=None)
         await self.tree.sync()
-
         log.info(
             "Startup complete. Database backend: %s | Cogs loaded: %s | Cogs failed: %s",
             self.db.backend,
@@ -123,7 +117,6 @@ bot = CommunityBot()
 @bot.event
 async def on_ready():
     log.info("Logged in as %s (%s)", bot.user, bot.user.id)
-
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
@@ -136,7 +129,6 @@ def build_alias_lookup():
     """Build shortcut -> real command path, ignoring missing/colliding entries."""
     lookup = {}
     skipped = []
-
     for command_path, aliases in COMMAND_ALIASES.items():
         for alias in aliases:
             key = alias.strip().lower()
@@ -146,7 +138,6 @@ def build_alias_lookup():
                 skipped.append(f"{key} (duplicate alias)")
                 continue
             lookup[key] = command_path
-
     return lookup, skipped
 
 
@@ -154,94 +145,65 @@ async def normalize_command_alias(bot, message):
     """Translate a leading shortcut into its canonical prefix command."""
     if message.author.bot:
         return
-
     prefixes = await get_prefix(bot, message)
     if isinstance(prefixes, str):
         prefixes = [prefixes]
-
     content = message.content
     matched_prefix = next(
-        (
-            prefix for prefix in sorted(prefixes, key=len, reverse=True)
-            if content.startswith(prefix)
-        ),
+        (prefix for prefix in sorted(prefixes, key=len, reverse=True)
+         if content.startswith(prefix)),
         None
     )
     if not matched_prefix:
         return
-
     command_text = content[len(matched_prefix):]
     if not command_text:
         return
-
     first_token, separator, remainder = command_text.partition(" ")
     lookup, _ = build_alias_lookup()
     command_path = lookup.get(first_token.lower())
     if command_path is None:
         return
-
-    # Only translate aliases whose target command actually exists.
-    target = bot.get_command(command_path)
-    if target is None:
+    if bot.get_command(command_path) is None:
         return
-
     translated = command_path.replace("_", " ")
-    new_command_text = translated + (separator + remainder if separator else "")
-    message.content = matched_prefix + new_command_text
-    log.info(
-        "Translated command alias: %r -> %r",
-        content,
-        message.content
+    message.content = matched_prefix + translated + (
+        separator + remainder if separator else ""
     )
+    log.info("Translated command alias: %r -> %r", content, message.content)
 
 
 async def normalize_spaced_command(bot, message):
-    """
-    Convert canonical commands containing underscores to their spaced form
-    while preserving arguments.
-    """
+    """Convert underscore command names to their spaced form."""
     if message.author.bot:
         return
-
     prefixes = await get_prefix(bot, message)
     if isinstance(prefixes, str):
         prefixes = [prefixes]
-
     content = message.content
     matched_prefix = next(
-        (
-            prefix
-            for prefix in sorted(prefixes, key=len, reverse=True)
-            if content.startswith(prefix)
-        ),
+        (prefix for prefix in sorted(prefixes, key=len, reverse=True)
+         if content.startswith(prefix)),
         None
     )
     if not matched_prefix:
         return
-
     command_text = content[len(matched_prefix):]
     if not command_text:
         return
-
     candidates = []
     for command in bot.walk_commands():
         qualified = command.qualified_name
         spaced = qualified.replace("_", " ")
         if spaced != qualified:
             candidates.append((spaced, qualified))
-
     candidates.sort(key=lambda item: len(item[0]), reverse=True)
     lowered = command_text.lower()
-
     for phrase, registered_name in candidates:
         if lowered == phrase or lowered.startswith(phrase + " "):
             remainder = command_text[len(phrase):]
             message.content = matched_prefix + registered_name + remainder
-            log.info(
-                "Normalized command: %r -> %r",
-                content,
-                message.content
-            )
+            log.info("Normalized command: %r -> %r", content, message.content)
             return
 
 
@@ -257,43 +219,31 @@ async def on_message(message):
 @bot.event
 async def on_command_error(ctx, error):
     original = getattr(error, "original", error)
-
     if isinstance(error, commands.CommandNotFound):
         return
-
     if isinstance(error, commands.CheckFailure):
-        await ctx.send(
-            "You don't have the permissions required for that command."
-        )
+        await ctx.send("You don't have the permissions required for that command.")
         return
-
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(
             f"Missing information: `{error.param.name}`. "
             "Check `,help` for the command format."
         )
         return
-
     if isinstance(error, commands.BadArgument):
         await ctx.send(
             "I couldn't understand one of the arguments. "
             "Check `,help` for the command format."
         )
         return
-
     log.error(
         "Command error in %s from %s (guild=%s): %s",
         ctx.command.qualified_name if ctx.command else "unknown",
         ctx.author.id,
         ctx.guild.id if ctx.guild else "DM",
         repr(original),
-        exc_info=(
-            type(original),
-            original,
-            original.__traceback__
-        )
+        exc_info=(type(original), original, original.__traceback__)
     )
-
     try:
         await ctx.send(
             "That command ran into an error. "
@@ -308,11 +258,9 @@ async def on_command_error(ctx, error):
 async def reload_cogs(ctx, *, cog: str = None):
     """Reload one cog, or all loaded cogs. Owner only."""
     cog_files = sorted(
-        path.stem
-        for path in Path("cogs").glob("*.py")
+        path.stem for path in Path("cogs").glob("*.py")
         if not path.name.startswith("_")
     )
-
     if cog:
         cog = cog.strip().removeprefix("cogs.").removesuffix(".py")
         if cog not in cog_files:
@@ -320,7 +268,6 @@ async def reload_cogs(ctx, *, cog: str = None):
                 f"Couldn't find cog `{cog}`. Available cogs: "
                 + ", ".join(f"`{name}`" for name in cog_files)
             )
-
         extension = f"cogs.{cog}"
         try:
             if extension in bot.extensions:
@@ -348,18 +295,14 @@ async def reload_cogs(ctx, *, cog: str = None):
         except Exception as exc:
             log.exception("Failed to reload extension %s", extension)
             failed.append(f"{name}: {type(exc).__name__}: {exc}")
-
     summary = f"Reload complete. **{len(succeeded)}** loaded/reloaded."
     if succeeded:
-        summary += "\n**Successful:** " + ", ".join(
-            f"`{name}`" for name in succeeded
-        )
+        summary += "\n**Successful:** " + ", ".join(f"`{name}`" for name in succeeded)
     if failed:
         summary += "\n**Failed:** " + "; ".join(failed)
     await ctx.send(summary)
 
 
-# HELP IS BUILT FROM THE LIVE COMMAND REGISTRY.
 COG_LABELS = {
     "automod": "AutoMod",
     "channel_manager": "Channel Management",
@@ -391,16 +334,14 @@ def get_help_categories():
     for command in bot.walk_commands():
         if command.hidden:
             continue
-        cog_name = command.cog.qualified_name if command.cog else "Core"
         label = COG_LABELS.get(
             command.cog.__class__.__module__.split(".")[-1]
             if command.cog else "core",
-            cog_name
+            command.cog.qualified_name if command.cog else "Core"
         )
         categories.setdefault(label, []).append(command)
-
-    for commands_in_category in categories.values():
-        commands_in_category.sort(key=lambda item: item.qualified_name.casefold())
+    for items in categories.values():
+        items.sort(key=lambda item: item.qualified_name.casefold())
     return dict(sorted(categories.items(), key=lambda item: item[0].casefold()))
 
 
@@ -417,7 +358,6 @@ def _help_embed(prefix, category=None, page=0):
         title="ONYX" if category is None else f"ONYX • {category}",
         color=discord.Color.from_rgb(44, 38, 67)
     )
-
     if category is None:
         total_commands = sum(len(items) for items in categories.values())
         embed.description = "\n".join([
@@ -436,15 +376,12 @@ def _help_embed(prefix, category=None, page=0):
         lines = []
         for command in page_items:
             description = command.help or command.brief or "No description available."
-            lines.append(
-                f"`{_command_usage(prefix, command)}`\n{description[:180]}"
-            )
+            lines.append(f"`{_command_usage(prefix, command)}`\n{description[:180]}")
         embed.description = (
             "\n\n".join(lines)
             + f"\n\n`{prefix}help <command>` for more details"
             + (f" • Page {page + 1}/{total_pages}" if total_pages > 1 else "")
         )
-
     embed.set_footer(text="ONYX • Prefix Commands Only")
     return embed
 
@@ -567,10 +504,14 @@ async def _send_help(ctx, command_query=None):
         command = bot.get_command(query.replace(" ", "_"))
         if command is None:
             command = bot.get_command(query)
-        if command is None:
+
+        # Hidden commands are not discoverable through direct help lookups.
+        if command is None or command.hidden:
             return await ctx.send(
-                f"I couldn't find `{command_query}`. Use `{prefix}help` to browse commands."
+                f"I couldn't find `{command_query}`. "
+                f"Use `{prefix}help` to browse commands."
             )
+
         embed = discord.Embed(
             title=f"ONYX • {command.qualified_name}",
             description=(
