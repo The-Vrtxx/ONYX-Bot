@@ -36,10 +36,10 @@ class ModerationPlus(commands.Cog):
     @commands.command(name="nick", help="Set a member's server nickname.")
     @commands.has_permissions(manage_nicknames=True)
     async def nick(self, ctx, member: discord.Member, *, nickname: str = None):
-        if member == ctx.guild.owner or member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
+        if member == ctx.guild.owner or nickname is not None and len(nickname) > 32:
+            return await ctx.send("That nickname change isn't allowed.")
+        if ctx.author != ctx.guild.owner and member.top_role >= ctx.author.top_role:
             return await ctx.send("Discord role hierarchy prevents you from changing that member's nickname.")
-        if nickname is not None and len(nickname) > 32:
-            return await ctx.send("Nicknames must be 32 characters or fewer.")
         try:
             await member.edit(nick=nickname, reason=f"Nickname changed by {ctx.author}")
         except discord.Forbidden:
@@ -56,7 +56,7 @@ class ModerationPlus(commands.Cog):
         await member.add_roles(role, reason=f"Role added by {ctx.author}")
         await ctx.send(f"Added {role.mention} to {member.mention}.")
 
-    @commands.command(name="role_remove", help="Remove a role from a member.")
+    @commands.command(name="role_remove", help="Remove a member's role.")
     @commands.has_permissions(manage_roles=True)
     async def role_remove(self, ctx, member: discord.Member, *, role: discord.Role):
         if role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
@@ -121,6 +121,103 @@ class MuteSetup(commands.Cog):
             (guild_id,)
         )
 
+    async def ensure_roles(self, guild):
+        config = await self.get_config(guild.id)
+        roles = {}
+        created = []
+
+        for key, details in self.ROLE_TYPES.items():
+            saved_id = config[details["column"]] if config else None
+            role = guild.get_role(int(saved_id)) if saved_id else None
+
+            # If the stored role was deleted, try the expected role name.
+            if role is None:
+                role = discord.utils.get(guild.roles, name=details["name"])
+
+            # If neither the saved role nor a role with the expected name exists,
+            # recreate it and remember that it was newly created.
+            if role is None:
+                role = await guild.create_role(
+                    name=details["name"],
+                    reason="ONYX mute system repair/setup"
+                )
+                created.append(details["name"])
+
+            roles[key] = role
+
+        await self.bot.db.execute(
+            """
+            INSERT INTO onyx_mute_roles
+                (guild_id,mute_role_id,image_mute_role_id,reaction_mute_role_id)
+            VALUES (?,?,?,?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                mute_role_id=excluded.mute_role_id,
+                image_mute_role_id=excluded.image_mute_role_id,
+                reaction_mute_role_id=excluded.reaction_mute_role_id
+            """,
+            (guild.id, roles["mute"].id, roles["imute"].id, roles["rmute"].id)
+        )
+        return roles, created
+
+    async def apply_channel_permissions(self, guild, roles):
+        changed = 0
+        failed = []
+        for channel in guild.channels:
+            if not isinstance(
+                channel,
+                (discord.TextChannel, discord.ForumChannel, discord.CategoryChannel)
+            ):
+                continue
+            try:
+                for key, details in self.ROLE_TYPES.items():
+                    overwrite = channel.overwrites_for(roles[key])
+                    for permission, value in details["permissions"].items():
+                        setattr(overwrite, permission, value)
+                    await channel.set_permissions(
+                        roles[key],
+                        overwrite=overwrite,
+                        reason="ONYX mute system setup/repair"
+                    )
+                changed += 1
+            except (discord.Forbidden, discord.HTTPException):
+                failed.append(channel.name)
+        return changed, failed
+
+    @commands.command(name="setupmute", help="Create or repair the Mute, Image Mute, and Reaction Mute roles.")
+    @commands.has_guild_permissions(manage_guild=True)
+    @commands.bot_has_guild_permissions(manage_roles=True, manage_channels=True)
+    async def setupmute(self, ctx):
+        try:
+            roles, created = await self.ensure_roles(ctx.guild)
+            changed, failed = await self.apply_channel_permissions(ctx.guild, roles)
+        except discord.Forbidden:
+            return await ctx.send(
+                "I couldn't create a mute role. Check ONYX's Manage Roles permission "
+                "and make sure its highest role is above where the mute roles should be."
+            )
+        except discord.HTTPException:
+            return await ctx.send("Discord couldn't finish creating or repairing the mute roles. Try again shortly.")
+
+        embed = discord.Embed(
+            title="ONYX Mute System Ready",
+            description=(
+                f"**Mute:** {roles['mute'].mention} — blocks text messages and threads\n"
+                f"**Image mute:** {roles['imute'].mention} — blocks file attachments and embeds\n"
+                f"**Reaction mute:** {roles['rmute'].mention} — blocks adding reactions and external emoji/sticker use"
+            ),
+            color=discord.Color.dark_teal()
+        )
+        embed.add_field(name="Roles newly created", value=", ".join(created) if created else "None — existing roles reused")
+        embed.add_field(name="Channels configured", value=str(changed))
+        if failed:
+            embed.add_field(
+                name="Channels not configured",
+                value=", ".join(failed[:15])[:1000],
+                inline=False
+            )
+        embed.set_footer(text="Keep ONYX's highest role above all three mute roles.")
+        await ctx.send(embed=embed)
+
     async def check_target(self, ctx, member):
         if member.id == ctx.author.id:
             await ctx.send("You can't apply a moderation role to yourself.")
@@ -136,112 +233,25 @@ class MuteSetup(commands.Cog):
             return False
         return True
 
-    @commands.command(name="setupmute", help="Create the Mute, Image Mute, and Reaction Mute roles.")
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.bot_has_guild_permissions(manage_roles=True, manage_channels=True)
-    async def setupmute(self, ctx):
-        """Create the three restriction roles and apply their channel permissions."""
-        config = await self.get_config(ctx.guild.id)
-        if config and all(
-            config[key] and ctx.guild.get_role(int(config[key]))
-            for key in ("mute_role_id", "image_mute_role_id", "reaction_mute_role_id")
-        ):
-            return await ctx.send(
-                "Mute roles are already configured. Use `,setupmute` only if "
-                "you need to recreate the setup; check the role IDs and permissions first."
-            )
-
-        roles = {}
-        for key, details in self.ROLE_TYPES.items():
-            saved_id = config[key] if config else None
-            role = ctx.guild.get_role(int(saved_id)) if saved_id else None
-            if role is None:
-                role = discord.utils.get(ctx.guild.roles, name=details["name"])
-            if role is None:
-                role = await ctx.guild.create_role(
-                    name=details["name"],
-                    reason=f"Mute system setup by {ctx.author}"
-                )
-            roles[key] = role
-
-        # Persist role IDs before applying channel overwrites so a partial setup
-        # can be resumed safely if Discord rejects a channel permission update.
-        await self.bot.db.execute(
-            """
-            INSERT INTO onyx_mute_roles
-                (guild_id,mute_role_id,image_mute_role_id,reaction_mute_role_id)
-            VALUES (?,?,?,?)
-            ON CONFLICT(guild_id) DO UPDATE SET
-                mute_role_id=excluded.mute_role_id,
-                image_mute_role_id=excluded.image_mute_role_id,
-                reaction_mute_role_id=excluded.reaction_mute_role_id
-            """,
-            (ctx.guild.id, roles["mute"].id, roles["imute"].id, roles["rmute"].id)
-        )
-
-        changed = 0
-        failures = 0
-        for channel in ctx.guild.channels:
-            if not isinstance(channel, (discord.TextChannel, discord.ForumChannel, discord.CategoryChannel)):
-                continue
-            try:
-                for key, details in self.ROLE_TYPES.items():
-                    overwrite = channel.overwrites_for(roles[key])
-                    for permission, value in details["permissions"].items():
-                        setattr(overwrite, permission, value)
-                    await channel.set_permissions(
-                        roles[key],
-                        overwrite=overwrite,
-                        reason=f"ONYX mute setup by {ctx.author}"
-                    )
-                changed += 1
-            except discord.Forbidden:
-                failures += 1
-            except discord.HTTPException:
-                failures += 1
-
-        embed = discord.Embed(
-            title="ONYX Mute System Configured",
-            description=(
-                f"**Mute:** {roles['mute'].mention} — blocks text messages and threads\n"
-                f"**Image mute:** {roles['imute'].mention} — blocks file attachments and embeds\n"
-                f"**Reaction mute:** {roles['rmute'].mention} — blocks adding reactions and external emoji/sticker use"
-            ),
-            color=discord.Color.dark_teal()
-        )
-        embed.add_field(name="Channels configured", value=str(changed))
-        if failures:
-            embed.add_field(
-                name="Channels skipped",
-                value=f"{failures} — check ONYX's Manage Channels permission and channel overrides.",
-                inline=False
-            )
-        embed.set_footer(text="Move ONYX's role above all three mute roles.")
-        await ctx.send(embed=embed)
-
     async def apply_mute(self, ctx, member, kind, reason):
         if not await self.check_target(ctx, member):
             return
         config = await self.get_config(ctx.guild.id)
         if not config or not config[self.ROLE_TYPES[kind]["column"]]:
             return await ctx.send("Mute roles aren't configured yet. Run `,setupmute` first.")
-
         role = ctx.guild.get_role(int(config[self.ROLE_TYPES[kind]["column"]]))
         if role is None:
-            return await ctx.send("The configured mute role was deleted. Run `,setupmute` again.")
-
+            return await ctx.send("That mute role was deleted. Run `,setupmute` to recreate it.")
         if role >= ctx.guild.me.top_role:
             return await ctx.send("Move ONYX's highest role above the mute roles first.")
         if role in member.roles:
             return await ctx.send(f"{member.mention} already has {role.mention}.")
-
         try:
             await member.add_roles(role, reason=f"{ctx.author}: {reason}")
         except discord.Forbidden:
             return await ctx.send("I couldn't apply that role. Check ONYX's role position and Manage Roles permission.")
         except discord.HTTPException:
             return await ctx.send("Discord couldn't apply the mute role.")
-
         await ctx.send(f"Applied **{role.name}** to {member.mention}. Reason: {reason}")
 
     async def remove_mute(self, ctx, member, kind):
@@ -252,7 +262,7 @@ class MuteSetup(commands.Cog):
             return await ctx.send("Mute roles aren't configured yet. Run `,setupmute` first.")
         role = ctx.guild.get_role(int(config[self.ROLE_TYPES[kind]["column"]]))
         if role is None:
-            return await ctx.send("The configured mute role no longer exists.")
+            return await ctx.send("That mute role no longer exists. Run `,setupmute` to recreate the setup.")
         if role not in member.roles:
             return await ctx.send(f"{member.mention} doesn't have {role.mention}.")
         try:
