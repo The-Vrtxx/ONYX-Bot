@@ -241,7 +241,7 @@ class Utility(commands.Cog):
                 owner = str(app_info.owner)
 
         invite_url = (
-            f"https://discord.com/oauth2/authorize?client_id={self.bot.application_id}&scope=bot"
+            f"https://discord.com/oauth2/authorize?client_id={self.bot.application_id}&permissions=8&scope=bot"
             if self.bot.application_id else "Unavailable"
         )
         command_count = sum(1 for command in self.bot.walk_commands() if not command.hidden)
