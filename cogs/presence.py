@@ -3,7 +3,6 @@ from discord.ext import commands, tasks
 
 
 class Presence(commands.Cog):
-
     def __init__(self, bot):
         self.bot = bot
 
@@ -14,11 +13,20 @@ class Presence(commands.Cog):
 
     @tasks.loop(seconds=30)
     async def rotate_presence(self):
+        server_count = len(self.bot.guilds)
+        # Combined member count across servers, not unique users.
+        member_count = sum(guild.member_count or 0 for guild in self.bot.guilds)
+
+        activity_text = (
+            f"your server. your command. | "
+            f"{server_count:,} servers • {member_count:,} members"
+        )
+
         await self.bot.change_presence(
             status=discord.Status.online,
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="your server. your command."
+                name=activity_text
             )
         )
 
