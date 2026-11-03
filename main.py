@@ -500,12 +500,22 @@ class OnyxHelpView(discord.ui.View):
 async def _send_help(ctx, command_query=None):
     prefix = ctx.prefix
     if command_query:
-        query = command_query.strip().lower()
+        query = command_query.strip().casefold()
+
+        # Resolve regular command names and Discord.py command aliases first.
         command = bot.get_command(query.replace(" ", "_"))
         if command is None:
             command = bot.get_command(query)
 
-        # Hidden commands are not discoverable through direct help lookups.
+        # Resolve shortcuts from cogs/aliases.py, including multi-word commands.
+        if command is None:
+            for command_path, shortcuts in COMMAND_ALIASES.items():
+                if query in {shortcut.casefold() for shortcut in shortcuts}:
+                    command = bot.get_command(command_path)
+                    if command is not None:
+                        break
+
+        # Do not reveal hidden commands, even if queried by their shortcut.
         if command is None or command.hidden:
             return await ctx.send(
                 f"I couldn't find `{command_query}`. "
