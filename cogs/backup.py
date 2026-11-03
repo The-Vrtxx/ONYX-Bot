@@ -80,10 +80,10 @@ class ServerBackup(commands.Cog):
                 "default_notifications": guild.default_notifications.value,
                 "explicit_content_filter": guild.explicit_content_filter.value,
                 "afk_timeout": guild.afk_timeout,
-                "system_channel_id": guild.system_channel_id,
-                "rules_channel_id": guild.rules_channel_id,
-                "public_updates_channel_id": guild.public_updates_channel_id,
-                "afk_channel_id": guild.afk_channel_id
+                "system_channel_id": guild.system_channel.id if guild.system_channel else None,
+                "rules_channel_id": guild.rules_channel.id if guild.rules_channel else None,
+                "public_updates_channel_id": guild.public_updates_channel.id if guild.public_updates_channel else None,
+                "afk_channel_id": guild.afk_channel.id if guild.afk_channel else None
             },
             "roles": roles, "channels": channels,
             "emojis": emojis, "member_roles": member_roles,
