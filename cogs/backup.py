@@ -270,7 +270,12 @@ class ServerBackup(commands.Cog):
         # Restore the relative order using the position slots currently occupied
         # by the recreated roles. This avoids assigning arbitrary positions (1..N),
         # which can collide with @everyone, ONYX's bot role, or managed roles.
-        saved_roles = sorted(data["roles"], key=lambda x: x.get("position", 0))
+        # Discord displays the highest position at the TOP, while the saved
+        # numeric positions are processed from low to high. Reverse the saved
+        # order when pairing it with ascending destination position slots.
+        saved_roles = sorted(
+            data["roles"], key=lambda x: x.get("position", 0), reverse=True
+        )
         ordered_roles = [
             role_map[int(item["id"])]
             for item in saved_roles
@@ -281,9 +286,11 @@ class ServerBackup(commands.Cog):
 
         if ordered_roles:
             try:
-                # Discord role positions are relative to every role in the guild.
-                # Reuse the slots belonging to the roles ONYX is allowed to move.
-                current_slots = sorted(role.position for role in ordered_roles)
+                # Pair top-to-bottom saved order with ascending position slots.
+                # This corrects the observed reversed hierarchy on restore.
+                current_slots = sorted(
+                    (role.position for role in ordered_roles), reverse=True
+                )
                 role_positions = {
                     role: slot for role, slot in zip(ordered_roles, current_slots)
                 }
@@ -295,9 +302,12 @@ class ServerBackup(commands.Cog):
                 # Verify the final order from Discord rather than assuming the
                 # bulk edit produced the requested hierarchy.
                 refreshed_roles = await guild.fetch_roles()
+                restored_id_set = {item.id for item in ordered_roles}
                 refreshed_ids = [
-                    role.id for role in sorted(refreshed_roles, key=lambda r: r.position)
-                    if role.id in {item.id for item in ordered_roles}
+                    role.id for role in sorted(
+                        refreshed_roles, key=lambda r: r.position, reverse=True
+                    )
+                    if role.id in restored_id_set
                 ]
                 expected_ids = [role.id for role in ordered_roles]
                 if refreshed_ids != expected_ids:
