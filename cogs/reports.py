@@ -3,7 +3,7 @@ from discord.ext import commands
 
 
 class Reports(commands.Cog):
-    """Per-server member reports with sequential ticket numbers and attachment links."""
+    """Per-server reports with optional forwarding to one owner-configured central channel."""
 
     MAX_ATTACHMENTS = 10
     MAX_DETAILS = 3500
@@ -28,18 +28,41 @@ class Reports(commands.Cog):
             )
             """
         )
+        await self.bot.db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS onyx_central_report_settings (
+                id BIGINT PRIMARY KEY,
+                channel_id BIGINT NOT NULL
+            )
+            """
+        )
+        await self.bot.db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS onyx_central_report_counter (
+                id BIGINT PRIMARY KEY,
+                next_ticket BIGINT NOT NULL DEFAULT 0
+            )
+            """
+        )
+
+    async def _check_channel(self, channel, guild):
+        if not isinstance(channel, discord.TextChannel):
+            return False
+        permissions = channel.permissions_for(guild.me)
+        return bool(
+            permissions.view_channel
+            and permissions.send_messages
+            and permissions.embed_links
+        )
 
     @commands.command(
         name="setupreport",
-        help="Set the channel where member reports are delivered."
+        help="(Owner) Set the report channel for the current server."
     )
     @commands.guild_only()
     @commands.is_owner()
-    @commands.bot_has_guild_permissions(send_messages=True, embed_links=True)
     async def setup_report(self, ctx, channel: discord.TextChannel):
-        me = ctx.guild.me
-        permissions = channel.permissions_for(me)
-        if not permissions.view_channel or not permissions.send_messages or not permissions.embed_links:
+        if not await self._check_channel(channel, ctx.guild):
             return await ctx.send(
                 "I need **View Channel**, **Send Messages**, and **Embed Links** in that channel."
             )
@@ -52,10 +75,34 @@ class Reports(commands.Cog):
             """,
             (ctx.guild.id, channel.id)
         )
-        await ctx.send(f"Reports for **{ctx.guild.name}** will be sent to {channel.mention}.")
+        await ctx.send(f"Local reports for **{ctx.guild.name}** will be sent to {channel.mention}.")
 
-    async def next_ticket_number(self, guild_id):
-        # Atomic per-server increment. RETURNING is supported by PostgreSQL and modern SQLite.
+    @commands.command(
+        name="setupcentralreports",
+        aliases=["centralreports"],
+        help="(Owner only) Set the one central channel that receives reports from every server."
+    )
+    @commands.guild_only()
+    @commands.is_owner()
+    async def setup_central_reports(self, ctx, channel: discord.TextChannel):
+        if not await self._check_channel(channel, ctx.guild):
+            return await ctx.send(
+                "I need **View Channel**, **Send Messages**, and **Embed Links** in that channel."
+            )
+
+        await self.bot.db.execute(
+            """
+            INSERT INTO onyx_central_report_settings (id, channel_id)
+            VALUES (1, ?)
+            ON CONFLICT(id) DO UPDATE SET channel_id=excluded.channel_id
+            """,
+            (channel.id,)
+        )
+        await ctx.send(
+            f"Central reporting is now enabled. Reports from every server will be forwarded to {channel.mention}."
+        )
+
+    async def next_server_ticket_number(self, guild_id):
         row = await self.bot.db.fetchone(
             """
             INSERT INTO onyx_report_counters (guild_id, next_ticket)
@@ -68,25 +115,57 @@ class Reports(commands.Cog):
         )
         return int(row["next_ticket"])
 
+    async def next_central_ticket_number(self):
+        row = await self.bot.db.fetchone(
+            """
+            INSERT INTO onyx_central_report_counter (id, next_ticket)
+            VALUES (1, 1)
+            ON CONFLICT(id) DO UPDATE
+                SET next_ticket = onyx_central_report_counter.next_ticket + 1
+            RETURNING next_ticket
+            """,
+            ()
+        )
+        return int(row["next_ticket"])
+
     @commands.command(
         name="report",
-        help="Submit a report to this server's configured report channel. You can attach images."
+        help="Submit a report. It is forwarded to the central ONYX report channel and this server's local channel, if configured."
     )
     @commands.guild_only()
     async def report(self, ctx, *, details: str = ""):
-        config = await self.bot.db.fetchone(
+        local_config = await self.bot.db.fetchone(
             "SELECT channel_id FROM onyx_report_settings WHERE guild_id=?",
             (ctx.guild.id,)
         )
-        if not config:
+        central_config = await self.bot.db.fetchone(
+            "SELECT channel_id FROM onyx_central_report_settings WHERE id=1",
+            ()
+        )
+
+        if not local_config and not central_config:
             return await ctx.send(
-                "The report system hasn't been set up in this server yet. Ask a server administrator to run `,setupreport #channel`."
+                "The report system isn't configured yet. Please contact a server administrator."
             )
 
-        report_channel = ctx.guild.get_channel(int(config["channel_id"]))
-        if not isinstance(report_channel, discord.TextChannel):
+        local_channel = None
+        if local_config:
+            local_channel = ctx.guild.get_channel(int(local_config["channel_id"]))
+            if not isinstance(local_channel, discord.TextChannel):
+                local_channel = None
+
+        central_channel = None
+        if central_config:
+            central_channel = self.bot.get_channel(int(central_config["channel_id"]))
+            if not isinstance(central_channel, discord.TextChannel):
+                try:
+                    central_channel = await self.bot.fetch_channel(int(central_config["channel_id"]))
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    central_channel = None
+
+        if local_channel is None and central_channel is None:
             return await ctx.send(
-                "The configured report channel is missing. Ask an administrator to run `,setupreport #channel` again."
+                "The configured report channel couldn't be found. Please contact the ONYX owner."
             )
 
         attachments = list(ctx.message.attachments)
@@ -101,19 +180,18 @@ class Reports(commands.Cog):
         if len(details) > self.MAX_DETAILS:
             return await ctx.send(f"Please keep the report description under {self.MAX_DETAILS} characters.")
 
-        permissions = report_channel.permissions_for(ctx.guild.me)
-        if not permissions.view_channel or not permissions.send_messages or not permissions.embed_links:
-            return await ctx.send(
-                "I can't post in the configured report channel. Ask an administrator to check my channel permissions."
-            )
-
+        local_number = None
+        central_number = None
         try:
-            ticket_number = await self.next_ticket_number(ctx.guild.id)
+            if local_channel is not None:
+                local_number = await self.next_server_ticket_number(ctx.guild.id)
+            if central_channel is not None:
+                central_number = await self.next_central_ticket_number()
         except Exception:
-            return await ctx.send("I couldn't assign a ticket number right now. Please try again shortly.")
+            return await ctx.send("I couldn't assign a report number right now. Please try again shortly.")
 
         embed = discord.Embed(
-            title=f"New Member Report • #{ticket_number:04d}",
+            title="New Member Report",
             description=details,
             color=discord.Color.dark_teal(),
             timestamp=discord.utils.utcnow()
@@ -128,7 +206,10 @@ class Reports(commands.Cog):
             value=f"{ctx.guild.name}\n`{ctx.guild.id}`",
             inline=True
         )
-        embed.add_field(name="Ticket", value=f"`#{ticket_number:04d}`", inline=True)
+        if local_number is not None:
+            embed.add_field(name="Server report #", value=f"`#{local_number:04d}`", inline=True)
+        if central_number is not None:
+            embed.add_field(name="Central report #", value=f"`#{central_number:05d}`", inline=True)
 
         if attachments:
             attachment_lines = []
@@ -141,24 +222,49 @@ class Reports(commands.Cog):
                 inline=False
             )
 
-        try:
-            await report_channel.send(
-                embed=embed,
-                allowed_mentions=discord.AllowedMentions.none()
-            )
-        except discord.Forbidden:
-            return await ctx.send(
-                "I couldn't send your report. Please let a server administrator know the report channel permissions need fixing."
-            )
-        except discord.HTTPException:
-            return await ctx.send(
-                "Discord couldn't deliver your report right now. Please try again shortly."
-            )
+        sent_local = False
+        sent_central = False
 
-        await ctx.send(
-            f"Your report was submitted successfully. Your ticket number is **#{ticket_number:04d}**.",
-            delete_after=20
-        )
+        if local_channel is not None:
+            local_embed = embed.copy()
+            local_embed.title = f"New Member Report • #{local_number:04d}"
+            try:
+                await local_channel.send(
+                    embed=local_embed,
+                    allowed_mentions=discord.AllowedMentions.none()
+                )
+                sent_local = True
+            except discord.HTTPException:
+                pass
+
+        if central_channel is not None:
+            central_embed = embed.copy()
+            central_embed.title = f"ONYX Central Report • #{central_number:05d}"
+            try:
+                await central_channel.send(
+                    embed=central_embed,
+                    allowed_mentions=discord.AllowedMentions.none()
+                )
+                sent_central = True
+            except discord.HTTPException:
+                pass
+
+        if sent_local or sent_central:
+            destinations = []
+            if sent_central:
+                destinations.append("ONYX staff")
+            if sent_local:
+                destinations.append("this server's staff")
+            await ctx.send(
+                f"Your report was submitted successfully to {' and '.join(destinations)}. "
+                f"Central reference: **#{central_number:05d}**." if sent_central
+                else "Your report was submitted successfully.",
+                delete_after=25
+            )
+        else:
+            await ctx.send(
+                "I couldn't deliver your report. Please contact a server administrator or the ONYX owner."
+            )
 
 
 async def setup(bot):
