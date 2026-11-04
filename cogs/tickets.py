@@ -5,21 +5,62 @@ import discord
 from discord.ext import commands
 
 
+TICKET_TYPES = {
+    "bug": {
+        "label": "Report a bug",
+        "description": "Report an ONYX bug, error, or broken feature.",
+        "emoji": "🐛",
+        "channel": "bug",
+    },
+    "invite": {
+        "label": "Get ONYX in my server",
+        "description": "Request information about adding ONYX to your server.",
+        "emoji": "➕",
+        "channel": "server",
+    },
+    "other": {
+        "label": "Other request",
+        "description": "Ask another question or make a different request.",
+        "emoji": "💬",
+        "channel": "other",
+    },
+}
+
+
 def is_ticket_staff(member):
     return member.guild_permissions.manage_channels or any(
         role.permissions.manage_channels for role in member.roles
     )
 
 
+class TicketTypeSelect(discord.ui.Select):
+    def __init__(self, cog):
+        self.cog = cog
+        options = [
+            discord.SelectOption(
+                label=item["label"],
+                value=key,
+                description=item["description"],
+                emoji=item["emoji"],
+            )
+            for key, item in TICKET_TYPES.items()
+        ]
+        super().__init__(
+            placeholder="Choose what you need help with...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="onyx_ticket_type_select",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.cog.create_ticket(interaction, self.values[0])
+
+
 class TicketPanelView(discord.ui.View):
     def __init__(self, cog):
         super().__init__(timeout=None)
-        self.cog = cog
-
-    @discord.ui.button(label="Open a ticket", style=discord.ButtonStyle.primary,
-                       emoji="🎫", custom_id="onyx_ticket_open")
-    async def open_ticket(self, interaction, button):
-        await self.cog.create_ticket(interaction)
+        self.add_item(TicketTypeSelect(cog))
 
 
 class TicketControlView(discord.ui.View):
@@ -44,6 +85,13 @@ class TicketControlView(discord.ui.View):
         if not row:
             return await interaction.response.send_message(
                 "This ticket isn't registered as open.", ephemeral=True)
+        current = await interaction.client.db.fetchone(
+            "SELECT claimed_by FROM onyx_tickets WHERE channel_id=?",
+            (channel.id,))
+        if current and current["claimed_by"]:
+            return await interaction.response.send_message(
+                f"This ticket is already claimed by <@{int(current['claimed_by'])}>.",
+                ephemeral=True)
         await interaction.client.db.execute(
             "UPDATE onyx_tickets SET claimed_by=? WHERE channel_id=?",
             (member.id, channel.id))
@@ -114,11 +162,27 @@ class Tickets(commands.Cog):
         self.creating = set()
         self.views_added = False
 
-    async def create_ticket(self, interaction):
+    async def cog_load(self):
+        # Add the ticket type field without changing or deleting existing tickets.
+        if getattr(self.bot.db, "backend", "sqlite") == "postgres":
+            await self.bot.db.execute(
+                "ALTER TABLE onyx_tickets ADD COLUMN IF NOT EXISTS ticket_type TEXT NOT NULL DEFAULT 'other'"
+            )
+        else:
+            columns = await self.bot.db.fetchall("PRAGMA table_info(onyx_tickets)")
+            if not any(row["name"] == "ticket_type" for row in columns):
+                await self.bot.db.execute(
+                    "ALTER TABLE onyx_tickets ADD COLUMN ticket_type TEXT NOT NULL DEFAULT 'other'"
+                )
+
+    async def create_ticket(self, interaction, ticket_type):
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message(
                 "Tickets are server-only.", ephemeral=True)
+        if ticket_type not in TICKET_TYPES:
+            return await interaction.response.send_message(
+                "Please choose one of the ticket options.", ephemeral=True)
 
         lock_key = (guild.id, interaction.user.id)
         if lock_key in self.creating:
@@ -137,14 +201,13 @@ class Tickets(commands.Cog):
                         f"You already have a ticket: {channel.mention}",
                         ephemeral=True)
 
+            item = TICKET_TYPES[ticket_type]
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 interaction.user: discord.PermissionOverwrite(
                     view_channel=True, send_messages=True,
                     read_message_history=True, attach_files=True),
             }
-            # Explicit channel overwrites are required because the @everyone
-            # deny otherwise hides the ticket from staff roles.
             for role in guild.roles:
                 if role != guild.default_role and role.permissions.manage_channels:
                     overwrites[role] = discord.PermissionOverwrite(
@@ -155,32 +218,62 @@ class Tickets(commands.Cog):
                     view_channel=True, send_messages=True, manage_channels=True,
                     read_message_history=True, attach_files=True)
 
+            category = None
+            settings = await self.bot.db.fetchone(
+                "SELECT category_id FROM onyx_ticket_settings WHERE guild_id=?",
+                (guild.id,))
+            if settings and settings["category_id"]:
+                candidate = guild.get_channel(int(settings["category_id"]))
+                if isinstance(candidate, discord.CategoryChannel):
+                    category = candidate
+
             channel = await guild.create_text_channel(
-                name=f"ticket-{interaction.user.id}"[:90],
+                name=f"{item['channel']}-{interaction.user.name}"[:90].lower(),
+                category=category,
                 overwrites=overwrites,
-                topic=f"ONYX ticket opened by user {interaction.user.id}",
+                topic=f"ONYX {item['label']} ticket opened by user {interaction.user.id}",
                 reason="ONYX support ticket created")
             await self.bot.db.execute(
-                "INSERT INTO onyx_tickets (guild_id,channel_id,opener_id,status) "
-                "VALUES (?,?,?,'open')",
-                (guild.id, channel.id, interaction.user.id))
+                "INSERT INTO onyx_tickets "
+                "(guild_id,channel_id,opener_id,status,ticket_type) "
+                "VALUES (?,?,?,'open',?)",
+                (guild.id, channel.id, interaction.user.id, ticket_type))
+            embed = discord.Embed(
+                title=f"{item['emoji']} {item['label']}",
+                description=(
+                    f"{interaction.user.mention}, thanks for contacting ONYX support.\n\n"
+                    "**Please describe your request below.** A staff member will respond here."
+                ),
+                color=discord.Color.dark_teal())
+            embed.add_field(name="Request type", value=item["label"], inline=False)
             await channel.send(
-                f"{interaction.user.mention}, tell the staff team how they can help.",
+                embed=embed,
                 view=TicketControlView(),
                 allowed_mentions=discord.AllowedMentions(users=True))
             await interaction.response.send_message(
-                f"Your ticket is ready: {channel.mention}", ephemeral=True)
+                f"Your **{item['label']}** ticket is ready: {channel.mention}",
+                ephemeral=True)
+        except discord.Forbidden:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "I couldn't create the ticket. Please check ONYX's Manage Channels permission.",
+                    ephemeral=True)
         finally:
             self.creating.discard(lock_key)
 
     @commands.command(name="ticket_setup",
-                      help="Post the ticket panel in this channel.")
+                      help="Post the ticket panel with request-type selection.")
     @commands.has_permissions(manage_guild=True)
     async def ticket_setup(self, ctx):
         embed = discord.Embed(
-            title="Support tickets",
-            description=("Press the button below to open a private support channel. "
-                         "Staff roles with Manage Channels can access tickets."),
+            title="Contact ONYX Support",
+            description=(
+                "Select the option that best describes what you need help with:\n\n"
+                "🐛 **Report a bug** — report an error or broken feature\n"
+                "➕ **Get ONYX in my server** — request bot/server information\n"
+                "💬 **Other request** — anything else\n\n"
+                "You must select a request type before a private ticket is created."
+            ),
             color=discord.Color.dark_grey())
         message = await ctx.send(embed=embed, view=TicketPanelView(self))
         await self.bot.db.execute(
@@ -189,7 +282,7 @@ class Tickets(commands.Cog):
             "channel_id=excluded.channel_id,message_id=excluded.message_id",
             (ctx.guild.id, ctx.channel.id, message.id))
         await ctx.send(
-            "Ticket panel saved. Its button will remain active after restarts.")
+            "Ticket panel saved. The selection menu will remain active after restarts.")
 
     @commands.Cog.listener()
     async def on_ready(self):
