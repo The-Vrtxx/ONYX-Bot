@@ -8,6 +8,7 @@ import re
 import time
 import asyncio
 from io import BytesIO
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
@@ -15,6 +16,21 @@ import discord
 from discord.ext import commands
 
 COLOR = discord.Color.from_rgb(25, 190, 190)
+ASSET_DIR = Path(__file__).resolve().parent.parent / "assets" / "onyx_prestige"
+PRESTIGE_EMBLEMS = {
+    0: "prestige_0.PNG",
+    1: "prestige_1.PNG",
+    2: "prestige_2.PNG",
+    3: "prestige_3.PNG",
+    4: "prestige_4.PNG",
+    5: "prestige_5.PNG",
+    6: "prestige_6.PNG",
+    7: "prestige_7.PNG",
+    8: "prestige_8.PNG",
+    9: "prestige_9.PNG",
+    10: "prestige_10.PNG",
+    "master": "prestige_master.PNG",
+}
 BASE_XP = 100
 LINEAR_XP = 50
 QUADRATIC_XP = 5
@@ -152,10 +168,13 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
     selected_title = str(cosmetics.get("title_id") or earned_title)
     if selected_title not in unlocked_titles:
         selected_title = earned_title
-    emblem = str(cosmetics.get("emblem_id") or "default")
-    if emblem == "default":
-        emblem = "master" if row["master_mode"] else f"prestige_{int(row['prestige'])}"
-    emblem_label = "MASTER EMBLEM" if emblem == "master" else f"{emblem.replace('_', ' ').upper()} EMBLEM"
+    # The rank insignia is tied to the user's actual progression, so the
+    # matching supplied ONYX artwork always appears on the card.
+    emblem_key = "master" if row["master_mode"] else int(row["prestige"])
+    emblem_label = (
+        "PRESTIGE MASTER EMBLEM" if emblem_key == "master"
+        else f"PRESTIGE {emblem_key} EMBLEM"
+    )
 
     # Equipped title panel.
     draw.rounded_rectangle((58, 238, 650, 315), radius=15,
@@ -167,10 +186,24 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
     # Right-side emblem / token display.
     draw.rounded_rectangle((710, 125, 1038, 315), radius=18,
                            fill=(8, 14, 25), outline=accent, width=2)
-    draw.text((740, 150), emblem_label, font=font_label, fill=(155, 175, 190))
-    draw.text((740, 184), "◆", font=_card_font(56, True), fill=accent)
-    draw.text((815, 191), f"{int(row['prestige'])}/10 PRESTIGE", font=font_value, fill=(245, 249, 252))
-    draw.text((740, 255), f"{tokens} TOKENS", font=font_value, fill=accent)
+    draw.text((740, 145), emblem_label, font=font_label, fill=(155, 175, 190))
+    emblem_file = PRESTIGE_EMBLEMS[emblem_key]
+    emblem_path = ASSET_DIR / emblem_file
+    if emblem_path.is_file():
+        with Image.open(emblem_path) as source_emblem:
+            insignia = source_emblem.convert("RGBA")
+            insignia.thumbnail((126, 126), Image.Resampling.LANCZOS)
+        image_rgba = image.convert("RGBA")
+        emblem_x = 874 - insignia.width // 2
+        emblem_y = 229 - insignia.height // 2
+        image_rgba.alpha_composite(insignia, (emblem_x, emblem_y))
+        image = image_rgba.convert("RGB")
+        draw = ImageDraw.Draw(image)
+    else:
+        # Clear fallback if an asset is accidentally omitted from deployment.
+        draw.text((740, 190), "ONYX", font=font_title, fill=accent)
+    draw.text((740, 270), f"{int(row['prestige'])}/10 PRESTIGE", font=font_value, fill=(245, 249, 252))
+    draw.text((740, 298), f"{tokens} TOKENS", font=font_value, fill=accent)
 
     # XP progress.
     needed = xp_needed(active_level)
