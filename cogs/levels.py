@@ -7,6 +7,9 @@ import random
 import re
 import time
 import asyncio
+from io import BytesIO
+
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 import discord
 from discord.ext import commands
@@ -30,6 +33,167 @@ MASTER_TITLES = {
     750: "Mythic",
     1000: "ONYX Master",
 }
+
+
+# Profile-card cosmetics are stored now; the Prestige Shop will add ownership
+# and equip commands in Step 3. These defaults keep every card renderable today.
+CARD_THEMES = {
+    "onyx": ((12, 18, 31), (22, 39, 55), (35, 210, 200)),
+    "frost": ((13, 25, 42), (34, 66, 91), (135, 220, 255)),
+    "inferno": ((36, 15, 19), (76, 28, 25), (255, 125, 65)),
+    "toxic": ((12, 30, 25), (24, 62, 46), (125, 235, 105)),
+    "eclipse": ((20, 17, 39), (48, 34, 72), (181, 135, 255)),
+    "void": ((8, 8, 18), (27, 25, 49), (160, 145, 255)),
+}
+CARD_FRAMES = {
+    "default": (55, 190, 190),
+    "steel": (145, 165, 180),
+    "neon": (45, 235, 220),
+    "elite": (190, 165, 95),
+    "obsidian": (115, 105, 150),
+    "legendary": (255, 190, 90),
+}
+CARD_EFFECTS = {
+    "none": None,
+    "teal_glow": (40, 220, 210),
+    "silver_shine": (205, 220, 235),
+    "electric_pulse": (100, 150, 255),
+    "cosmic_aura": (175, 115, 255),
+}
+
+
+def _card_font(size: int, bold: bool = False):
+    candidates = (
+        ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"]
+        if bold else
+        ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+         "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"]
+    )
+    for candidate in candidates:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _fit_text(draw, text, font, max_width):
+    text = str(text)
+    while text and draw.textbbox((0, 0), text, font=font)[2] > max_width:
+        text = text[:-2] + "…" if len(text) > 2 else text[:-1]
+    return text
+
+
+def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
+                             tokens: int, cosmetics=None) -> BytesIO:
+    """Render the user's ONYX profile as a PNG attachment."""
+    cosmetics = cosmetics or {}
+    theme_key = str(cosmetics.get("theme_id") or "onyx").lower()
+    frame_key = str(cosmetics.get("frame_id") or "default").lower()
+    effect_key = str(cosmetics.get("effect_id") or "none").lower()
+    theme = CARD_THEMES.get(theme_key, CARD_THEMES["onyx"])
+    frame_color = CARD_FRAMES.get(frame_key, CARD_FRAMES["default"])
+    accent = theme[2]
+    width, height = 1100, 430
+
+    image = Image.new("RGB", (width, height), theme[0])
+    pixels = image.load()
+    for x in range(width):
+        ratio = x / max(1, width - 1)
+        color = tuple(int(theme[0][i] * (1-ratio) + theme[1][i] * ratio) for i in range(3))
+        for y in range(height):
+            pixels[x, y] = color
+
+    draw = ImageDraw.Draw(image)
+    # Subtle geometric background accents.
+    draw.ellipse((790, -210, 1240, 240), fill=tuple(max(0, c - 5) for c in theme[1]))
+    draw.ellipse((900, 190, 1220, 510), fill=tuple(max(0, c - 8) for c in theme[1]))
+    draw.rounded_rectangle((18, 18, width-18, height-18), radius=28,
+                           outline=frame_color, width=5)
+    draw.rounded_rectangle((31, 31, width-31, height-31), radius=22,
+                           outline=tuple(min(255, int(c * 0.55 + 40)) for c in frame_color), width=1)
+
+    effect_color = CARD_EFFECTS.get(effect_key)
+    if effect_color:
+        glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        gd.rounded_rectangle((25, 25, width-25, height-25), radius=28,
+                             outline=(*effect_color, 100), width=15)
+        glow = glow.filter(ImageFilter.GaussianBlur(12))
+        image = Image.alpha_composite(image.convert("RGBA"), glow).convert("RGB")
+        draw = ImageDraw.Draw(image)
+
+    font_brand = _card_font(25, True)
+    font_name = _card_font(43, True)
+    font_stage = _card_font(27, True)
+    font_title = _card_font(31, True)
+    font_label = _card_font(16, True)
+    font_value = _card_font(22, True)
+    font_small = _card_font(17)
+
+    draw.text((58, 48), "ONYX", font=font_brand, fill=accent)
+    draw.text((155, 55), "GLOBAL PROFILE", font=font_label, fill=(165, 185, 202))
+    draw.line((58, 98, width-58, 98), fill=tuple(int(c * .7) for c in accent), width=2)
+
+    draw.text((58, 125), _fit_text(draw, display_name, font_name, 620),
+              font=font_name, fill=(245, 249, 252))
+
+    if row["master_mode"]:
+        stage = f"PRESTIGE MASTER  •  LEVEL {int(row['master_level']):,} / 1,000"
+        active_level = int(row["master_level"])
+    else:
+        prestige = int(row["prestige"])
+        stage = f"PRESTIGE {prestige}  •  LEVEL {int(row['level']):,} / 60" if prestige else f"LEVEL {int(row['level']):,} / 60"
+        active_level = int(row["level"])
+    draw.text((60, 185), stage, font=font_stage, fill=accent)
+
+    earned_title = unlocked_titles[-1] if unlocked_titles else "No Master Title Yet"
+    selected_title = str(cosmetics.get("title_id") or earned_title)
+    if selected_title not in unlocked_titles:
+        selected_title = earned_title
+    emblem = str(cosmetics.get("emblem_id") or "default")
+    if emblem == "default":
+        emblem = "master" if row["master_mode"] else f"prestige_{int(row['prestige'])}"
+    emblem_label = "MASTER EMBLEM" if emblem == "master" else f"{emblem.replace('_', ' ').upper()} EMBLEM"
+
+    # Equipped title panel.
+    draw.rounded_rectangle((58, 238, 650, 315), radius=15,
+                           fill=(8, 14, 25), outline=accent, width=2)
+    draw.text((78, 250), "EQUIPPED TITLE", font=font_label, fill=(145, 165, 180))
+    draw.text((78, 274), _fit_text(draw, selected_title, font_title, 545),
+              font=font_title, fill=(245, 249, 252))
+
+    # Right-side emblem / token display.
+    draw.rounded_rectangle((710, 125, 1038, 315), radius=18,
+                           fill=(8, 14, 25), outline=accent, width=2)
+    draw.text((740, 150), emblem_label, font=font_label, fill=(155, 175, 190))
+    draw.text((740, 184), "◆", font=_card_font(56, True), fill=accent)
+    draw.text((815, 191), f"{int(row['prestige'])}/10 PRESTIGE", font=font_value, fill=(245, 249, 252))
+    draw.text((740, 255), f"{tokens} TOKENS", font=font_value, fill=accent)
+
+    # XP progress.
+    needed = xp_needed(active_level)
+    current_xp = int(row["xp"])
+    ratio = min(1.0, max(0.0, current_xp / needed)) if needed else 1.0
+    draw.text((60, 333), f"XP  {current_xp:,} / {needed:,}", font=font_label, fill=(205, 220, 230))
+    draw.rounded_rectangle((260, 337, 700, 356), radius=9, fill=(5, 10, 18))
+    if ratio > 0:
+        draw.rounded_rectangle((260, 337, 260 + int(440 * ratio), 356),
+                               radius=9, fill=accent)
+    draw.text((725, 333), f"{ratio*100:.1f}%", font=font_label, fill=(235, 242, 248))
+
+    draw.text((60, 390), f"LIFETIME XP  {int(row['lifetime_xp']):,}",
+              font=font_small, fill=(165, 185, 202))
+    draw.text((390, 390), f"UNLOCKED TITLES  {len(unlocked_titles)}",
+              font=font_small, fill=(165, 185, 202))
+    draw.text((785, 390), f"THEME  {theme_key.upper()}",
+              font=font_small, fill=(165, 185, 202))
+
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    output.seek(0)
+    return output
 
 
 def xp_needed(level: int) -> int:
@@ -146,6 +310,16 @@ class Levels(commands.Cog):
             )
         """)
         await self.bot.db.execute("""
+            CREATE TABLE IF NOT EXISTS onyx_profile_equipped (
+                user_id BIGINT PRIMARY KEY,
+                frame_id TEXT NOT NULL DEFAULT 'default',
+                theme_id TEXT NOT NULL DEFAULT 'onyx',
+                emblem_id TEXT NOT NULL DEFAULT 'default',
+                effect_id TEXT NOT NULL DEFAULT 'none',
+                title_id TEXT
+            )
+        """)
+        await self.bot.db.execute("""
             CREATE TABLE IF NOT EXISTS onyx_level_settings (
                 guild_id BIGINT PRIMARY KEY,
                 min_xp INTEGER NOT NULL DEFAULT 15,
@@ -240,6 +414,17 @@ class Levels(commands.Cog):
             "SELECT tokens FROM onyx_prestige_wallet WHERE user_id=?", (user_id,)
         )
         return int(wallet["tokens"]) if wallet else 0
+
+    async def equipped_cosmetics(self, user_id: int):
+        await self.bot.db.execute(
+            "INSERT INTO onyx_profile_equipped (user_id) VALUES (?) "
+            "ON CONFLICT(user_id) DO NOTHING",
+            (user_id,),
+        )
+        row = await self.bot.db.fetchone(
+            "SELECT * FROM onyx_profile_equipped WHERE user_id=?", (user_id,)
+        )
+        return dict(row) if row is not None else {}
 
     async def apply_prestige(self, user_id: int) -> bool:
         """Apply one valid transition; award tokens only for Prestige I through X."""
@@ -430,47 +615,26 @@ class Levels(commands.Cog):
             rewards = await self.give_rewards(message.author, reward_level)
             await self.announce_level_up(message, settings, new, rewards)
 
-    @commands.command(name="rank", aliases=["level"], help="View your global ONYX rank.")
+    @commands.command(name="rank", aliases=["level"], help="View your ONYX profile card.")
     @commands.guild_only()
     async def rank(self, ctx, member: discord.Member = None):
         member = member or ctx.author
         row = await self.profile(member.id)
-        current_level = row["master_level"] if row["master_mode"] else row["level"]
-        needed = xp_needed(current_level)
-        embed = discord.Embed(
-            title=f"{member.display_name} • ONYX Global Rank", color=COLOR
+        unlocked = self.unlocked_titles(row)
+        tokens = await self.prestige_tokens(member.id)
+        cosmetics = await self.equipped_cosmetics(member.id)
+        card = render_onyx_profile_card(
+            display_name=member.display_name,
+            row=row,
+            unlocked_titles=unlocked,
+            tokens=tokens,
+            cosmetics=cosmetics,
         )
-        embed.add_field(name="Rank", value=f"**{stage_label(row)}**", inline=False)
-        embed.add_field(
-            name="Prestige",
-            value="**Prestige Master**" if row["master_mode"]
-            else f"**{row['prestige']}/{MAX_PRESTIGE}**",
+        filename = f"onyx-profile-{member.id}.png"
+        await ctx.send(
+            file=discord.File(card, filename=filename),
+            content=f"**{discord.utils.escape_markdown(member.display_name)} • ONYX Profile**"
         )
-        embed.add_field(name="Lifetime XP", value=f"**{row['lifetime_xp']:,}**")
-        embed.add_field(
-            name="Prestige Tokens",
-            value=f"**{await self.prestige_tokens(member.id)}**",
-        )
-        title = self.current_master_title(row)
-        if title:
-            embed.add_field(name="Master Title", value=f"**{title}**")
-        if not self.eligible(row):
-            embed.add_field(
-                name=f"Progress • {row['xp']:,}/{needed:,} XP",
-                value=(
-                    f"`{progress_bar(row['xp'], needed)}` "
-                    f"**{row['xp'] / needed * 100:.1f}%**"
-                ),
-                inline=False,
-            )
-        else:
-            embed.add_field(
-                name="Next step",
-                value="Run `,prestige` to choose your next step.",
-                inline=False,
-            )
-        embed.set_footer(text="ONYX • One global profile across every server")
-        await ctx.send(embed=embed)
 
     @commands.command(name="leaderboard", aliases=["levels_top"])
     @commands.guild_only()
