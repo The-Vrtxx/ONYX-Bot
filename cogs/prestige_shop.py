@@ -7,8 +7,11 @@ Commands:
   ,punequip <category>        Reset a cosmetic slot
 """
 import asyncio
+import io
+import math
 import re
 
+from PIL import Image, ImageDraw, ImageFont
 import discord
 from discord.ext import commands
 
@@ -41,6 +44,27 @@ SHOP = {
         "electric_pulse": ("Electric Pulse", 20, "An electric blue effect."),
         "cosmic_aura": ("Cosmic Aura", 25, "A cosmic purple aura."),
     },
+}
+
+
+RARITY_BY_COST = {
+    5: ("COMMON", (170, 185, 198)),
+    10: ("UNCOMMON", (70, 210, 160)),
+    15: ("RARE", (70, 160, 255)),
+    20: ("EPIC", (180, 100, 255)),
+    25: ("LEGENDARY", (255, 190, 65)),
+}
+ART_PALETTES = {
+    "steel": (150, 175, 195), "neon": (40, 235, 220),
+    "elite": (255, 195, 70), "obsidian": (150, 100, 230),
+    "legendary": (255, 95, 65), "frost": (110, 205, 255),
+    "inferno": (255, 95, 45), "toxic": (130, 240, 75),
+    "eclipse": (185, 100, 255), "void": (125, 75, 220),
+    "veteran": (160, 190, 215), "champion": (255, 200, 70),
+    "warlord": (255, 90, 85), "mythic": (210, 100, 255),
+    "elite": (255, 195, 70), "teal_glow": (40, 235, 220),
+    "silver_shine": (220, 235, 245), "electric_pulse": (70, 145, 255),
+    "cosmic_aura": (185, 90, 255),
 }
 
 DEFAULTS = {
@@ -192,6 +216,62 @@ class PrestigeShop(commands.Cog):
             )
             return True, f"You unlocked **{name}**!", after
 
+    def _shop_art(self, category: str, item_id: str | None = None):
+        """Create a distinct compact cosmetic illustration for the selected shop item."""
+        item_id = item_id if item_id in SHOP.get(category, {}) else next(iter(SHOP[category]))
+        name, cost, _ = SHOP[category][item_id]
+        rarity, accent = RARITY_BY_COST[cost]
+        accent = ART_PALETTES.get(item_id, accent)
+        image = Image.new("RGB", (512, 512), (5, 12, 22))
+        draw = ImageDraw.Draw(image)
+        # Layered radial-style rings and a category-specific centerpiece.
+        for radius, alpha in ((225, 55), (185, 85), (145, 125)):
+            box = (256-radius, 256-radius, 256+radius, 256+radius)
+            draw.ellipse(box, outline=tuple(int(c*alpha/125) for c in accent), width=5)
+        seed = sum(ord(ch) for ch in (category + item_id))
+        for i in range(12):
+            angle = (math.pi * 2 * i / 12) + (seed % 17) * .03
+            x1, y1 = 256 + math.cos(angle)*150, 256 + math.sin(angle)*150
+            x2, y2 = 256 + math.cos(angle)*218, 256 + math.sin(angle)*218
+            draw.line((x1, y1, x2, y2), fill=accent, width=4)
+        if category == "frame":
+            draw.rounded_rectangle((115, 115, 397, 397), radius=42, outline=accent, width=20)
+            draw.rounded_rectangle((145, 145, 367, 367), radius=28, outline=(210,225,240), width=3)
+            for x,y in ((115,115),(397,115),(115,397),(397,397)):
+                draw.polygon([(x,y-18),(x+18,y),(x,y+18),(x-18,y)], fill=accent)
+        elif category == "theme":
+            for i in range(7):
+                y = 145 + i*34
+                draw.arc((90, y-50, 422, y+90), start=190+(seed%40), end=350+(seed%40), fill=accent, width=9)
+            draw.ellipse((195,195,317,317), fill=(12,24,42), outline=accent, width=8)
+        elif category == "emblem":
+            points=[]
+            for i in range(16):
+                angle=-math.pi/2 + i*math.pi/8
+                r=145 if i%2==0 else 78
+                points.append((256+math.cos(angle)*r,256+math.sin(angle)*r))
+            draw.polygon(points, fill=(12,25,42), outline=accent)
+            draw.ellipse((210,210,302,302), outline=(230,240,250), width=7)
+            draw.line((256,178,256,334), fill=accent, width=8)
+        else:
+            for i in range(9):
+                angle=(math.pi*2*i/9)+(seed%13)*.04
+                x=256+math.cos(angle)*105; y=256+math.sin(angle)*105
+                draw.ellipse((x-18,y-18,x+18,y+18), fill=accent)
+                draw.line((256,256,x,y), fill=accent, width=5)
+            draw.ellipse((205,205,307,307), outline=(235,245,255), width=8)
+        try:
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", 24)
+        except OSError:
+            font = ImageFont.load_default()
+        label = rarity
+        bbox = draw.textbbox((0,0), label, font=font)
+        draw.text(((512-(bbox[2]-bbox[0]))/2, 455), label, font=font, fill=accent)
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        output.seek(0)
+        return discord.File(output, filename="onyx-shop-art.png")
+
     def _shop_embed(self, balance: int, category: str = "frame",
                     selected: str | None = None, owned=None):
         owned = owned or set()
@@ -199,7 +279,8 @@ class PrestigeShop(commands.Cog):
             title="ONYX  /  PRESTIGE SHOP",
             description=(
                 "Use your Prestige Tokens to customize your global profile card.\n"
-                "Choose a category, select an item, and preview its details here."
+                "Choose a category, select an item, and preview its details here. "
+                "Use **Preview on Card** to see the cosmetic on your actual profile card."
             ),
             color=discord.Color.from_rgb(25, 190, 190),
         )
@@ -211,11 +292,14 @@ class PrestigeShop(commands.Cog):
             status = "✅ Owned" if is_owned else (
                 "🟢 Affordable" if balance >= cost else "🔒 Not enough tokens"
             )
+            rarity, rarity_rgb = RARITY_BY_COST[cost]
+            embed.color = discord.Color.from_rgb(*rarity_rgb)
             embed.add_field(
-                name=f"SELECTED ITEM  /  {name}",
-                value=f"{description}\n\n**Price:** {cost} tokens\n**Status:** {status}",
+                name=f"{rarity}  /  {name}",
+                value=f"{description}\n\n**Price:** {cost} tokens\n**Rarity:** {rarity.title()}\n**Status:** {status}",
                 inline=False,
             )
+            embed.set_thumbnail(url="attachment://onyx-shop-art.png")
         else:
             embed.add_field(
                 name="HOW TO SHOP",
@@ -226,9 +310,15 @@ class PrestigeShop(commands.Cog):
         lines = []
         for item_id, (name, cost, _desc) in SHOP[category].items():
             mark = " ✓" if (category, item_id) in owned else ""
-            lines.append(f"`{cost:>2}` • **{name}**{mark}")
+            rarity = RARITY_BY_COST[cost][0].title()
+            lines.append(f"`{cost:>2}` • **{name}** — *{rarity}*{mark}")
         embed.add_field(name=f"{category.upper()} CATALOG", value="\n".join(lines), inline=False)
-        embed.set_footer(text="Purchases are permanent • Titles are earned through progression")
+        embed.add_field(
+            name="RARITY GUIDE",
+            value="Common · Uncommon · Rare · Epic · Legendary\nHigher token prices indicate higher cosmetic rarity.",
+            inline=False,
+        )
+        embed.set_footer(text="Each item has its own generated artwork • Purchases are permanent")
         return embed
 
     async def _send_workspace(self, ctx, workspace: str = "shop"):
@@ -251,7 +341,7 @@ class PrestigeShop(commands.Cog):
             balance = await self._wallet(user_id)
             owned = await self._owned(user_id)
             view = ShopView(self, user_id, balance, owned)
-            await ctx.send(embed=self._shop_embed(balance, owned=owned), view=view)
+            await ctx.send(embed=self._shop_embed(balance, owned=owned), file=self._shop_art("frame"), view=view)
 
     @commands.command(name="onyx", aliases=["menu", "hub"])
     @commands.guild_only()
@@ -399,6 +489,7 @@ class ShopView(discord.ui.View):
         self.owned = await self.cog._owned(self.user_id)
         await interaction.response.edit_message(
             embed=self.cog._shop_embed(self.balance, self.category, self.selected, self.owned),
+            attachments=[self.cog._shop_art(self.category, self.selected)],
             view=self,
         )
 
@@ -422,7 +513,40 @@ class ShopView(discord.ui.View):
         await interaction.response.edit_message(
             content=f"✅ {message}" if success else f"ℹ️ {message}",
             embed=self.cog._shop_embed(self.balance, self.category, self.selected, self.owned),
+            attachments=[self.cog._shop_art(self.category, self.selected)],
             view=self,
+        )
+
+    @discord.ui.button(label="Preview on Card", style=discord.ButtonStyle.primary, emoji=None, row=2)
+    async def preview_art_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected:
+            return await interaction.response.send_message(
+                "Select a shop item first, then preview it on your profile card.",
+                ephemeral=True,
+            )
+        levels = self.cog._levels_cog()
+        if not levels:
+            return await interaction.response.send_message(
+                "The Levels cog is not loaded. Please try again after it starts.",
+                ephemeral=True,
+            )
+        row = await levels.profile(self.user_id)
+        titles = await levels.sync_unlocked_titles(self.user_id, row)
+        cosmetics = await levels.equipped_cosmetics(self.user_id)
+        column = COLUMN_BY_CATEGORY[self.category]
+        cosmetics[column] = self.selected
+        card = levels.render_onyx_profile_card(
+            display_name=interaction.user.display_name,
+            row=row,
+            unlocked_titles=titles,
+            tokens=await levels.prestige_tokens(self.user_id),
+            cosmetics=cosmetics,
+        )
+        name = display_item(self.category, self.selected)
+        await interaction.response.send_message(
+            content=f"**{name}** — preview only. This has not been equipped or purchased.",
+            file=discord.File(card, filename="onyx-cosmetic-preview.png"),
+            ephemeral=True,
         )
 
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, emoji=None, row=2)
@@ -560,7 +684,10 @@ class WorkspaceSelect(discord.ui.Select):
             embed = cog._shop_embed(balance, owned=owned)
             content = "🛒 **ONYX Prestige Shop**"
 
-        await interaction.response.edit_message(content=content, embed=embed, view=new_view)
+        if destination == "shop":
+            await interaction.response.edit_message(content=content, embed=embed, attachments=[cog._shop_art("frame")], view=new_view)
+        else:
+            await interaction.response.edit_message(content=content, embed=embed, attachments=[], view=new_view)
 
 
 class InventoryView(discord.ui.View):
