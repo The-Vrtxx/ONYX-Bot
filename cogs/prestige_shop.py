@@ -10,7 +10,6 @@ import asyncio
 import io
 import math
 import re
-from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 import discord
@@ -274,11 +273,51 @@ class PrestigeShop(commands.Cog):
         return discord.File(output, filename="onyx-shop-art.png")
 
     def _shop_welcome_art(self):
-        """Return the ONYX welcome banner shown before a member selects an item."""
-        asset = Path(__file__).resolve().parent.parent / "assets" / "onyx_shop_welcome.png"
-        if not asset.exists():
-            raise FileNotFoundError(f"Missing ONYX shop welcome artwork: {asset}")
-        return discord.File(str(asset), filename="onyx-shop-welcome.png")
+        """Generate the ONYX welcome banner in memory; no asset file is required."""
+        image = Image.new("RGB", (900, 520), (5, 12, 22))
+        draw = ImageDraw.Draw(image)
+
+        # Teal and violet orbital rings echo the ONYX profile-card styling.
+        for radius, color, width in (
+            (205, (25, 190, 190), 7),
+            (165, (75, 95, 150), 5),
+            (125, (105, 65, 155), 4),
+        ):
+            box = (450-radius, 220-radius, 450+radius, 220+radius)
+            draw.ellipse(box, outline=color, width=width)
+
+        # Central ONYX diamond mark.
+        diamond = [(450, 80), (590, 220), (450, 360), (310, 220)]
+        draw.polygon(diamond, fill=(10, 25, 43), outline=(45, 215, 205), width=8)
+        inner = [(450, 125), (545, 220), (450, 315), (355, 220)]
+        draw.line(inner + [inner[0]], fill=(175, 205, 225), width=5)
+
+        try:
+            title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 62)
+            subtitle_font = ImageFont.truetype("DejaVuSans.ttf", 27)
+            small_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 20)
+        except OSError:
+            title_font = subtitle_font = small_font = ImageFont.load_default()
+
+        title = "ONYX"
+        title_box = draw.textbbox((0, 0), title, font=title_font)
+        draw.text(((900-(title_box[2]-title_box[0]))/2, 175),
+                  title, font=title_font, fill=(235, 245, 250))
+
+        subtitle = "PRESTIGE SHOP"
+        subtitle_box = draw.textbbox((0, 0), subtitle, font=subtitle_font)
+        draw.text(((900-(subtitle_box[2]-subtitle_box[0]))/2, 405),
+                  subtitle, font=subtitle_font, fill=(45, 215, 205))
+
+        footer = "CUSTOMIZE YOUR GLOBAL PROFILE"
+        footer_box = draw.textbbox((0, 0), footer, font=small_font)
+        draw.text(((900-(footer_box[2]-footer_box[0]))/2, 458),
+                  footer, font=small_font, fill=(175, 190, 210))
+
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        output.seek(0)
+        return discord.File(output, filename="onyx-shop-welcome.png")
 
     def _shop_embed(self, balance: int, category: str = "frame",
                     selected: str | None = None, owned=None):
