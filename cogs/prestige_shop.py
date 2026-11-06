@@ -231,21 +231,47 @@ class PrestigeShop(commands.Cog):
         embed.set_footer(text="Purchases are permanent • Titles are earned through progression")
         return embed
 
+    async def _send_workspace(self, ctx, workspace: str = "shop"):
+        user_id = ctx.author.id
+        if workspace == "inventory":
+            await ctx.send(
+                embed=await self._inventory_embed(user_id, ctx.author.display_name),
+                view=InventoryView(self, user_id),
+            )
+        elif workspace == "studio":
+            levels = self._levels_cog()
+            if not levels:
+                return await ctx.send("The Levels cog is not loaded. Please try again after it starts.")
+            equipped = await self._equipped(user_id)
+            owned = await self._owned(user_id)
+            titles = await self._earned_titles(user_id)
+            view = ProfilePreviewView(self, user_id, equipped, owned, titles)
+            await ctx.send(embed=view.make_embed(), view=view)
+        else:
+            balance = await self._wallet(user_id)
+            owned = await self._owned(user_id)
+            view = ShopView(self, user_id, balance, owned)
+            await ctx.send(embed=self._shop_embed(balance, owned=owned), view=view)
+
+    @commands.command(name="onyx", aliases=["menu", "hub"])
+    @commands.guild_only()
+    async def onyx(self, ctx):
+        """Open the central ONYX menu."""
+        await self._send_workspace(ctx, "shop")
+
     @commands.command(name="shop", aliases=["pshop", "prestigeshop"])
     @commands.guild_only()
     async def shop(self, ctx):
-        balance = await self._wallet(ctx.author.id)
-        owned = await self._owned(ctx.author.id)
-        view = ShopView(self, ctx.author.id, balance, owned)
-        await ctx.send(embed=self._shop_embed(balance, owned=owned), view=view)
+        await self._send_workspace(ctx, "shop")
 
     @commands.command(name="pinventory", aliases=["prestigeinventory", "inventory"])
     @commands.guild_only()
     async def pinventory(self, ctx, member: discord.Member = None):
         member = member or ctx.author
-        embed = await self._inventory_embed(member.id, member.display_name)
-        view = InventoryView(self, member.id) if member.id == ctx.author.id else None
-        await ctx.send(embed=embed, view=view)
+        if member.id == ctx.author.id:
+            await self._send_workspace(ctx, "inventory")
+        else:
+            await ctx.send(embed=await self._inventory_embed(member.id, member.display_name))
 
     async def _inventory_embed(self, user_id: int, display_name: str = "Your"):
         owned = await self._owned(user_id)
@@ -357,6 +383,7 @@ class ShopView(discord.ui.View):
         self.selected = None
         self.add_item(CategorySelect(self))
         self.add_item(ItemSelect(self))
+        self.add_item(WorkspaceSelect(self, "shop"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -375,7 +402,7 @@ class ShopView(discord.ui.View):
             view=self,
         )
 
-    @discord.ui.button(label="Buy Item", style=discord.ButtonStyle.success, emoji="🛒", row=2)
+    @discord.ui.button(label="Buy Item", style=discord.ButtonStyle.success, emoji=None, row=2)
     async def buy_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected:
             return await interaction.response.send_message(
@@ -398,11 +425,11 @@ class ShopView(discord.ui.View):
             view=self,
         )
 
-    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, emoji="🔄", row=2)
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, emoji=None, row=2)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.refresh(interaction)
 
-    @discord.ui.button(label="Inventory", style=discord.ButtonStyle.primary, emoji="🎒", row=2)
+    @discord.ui.button(label="Inventory", style=discord.ButtonStyle.primary, emoji=None, row=2)
     async def inventory_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             embed=await self.cog._inventory_embed(self.user_id),
@@ -410,7 +437,7 @@ class ShopView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, emoji="✖", row=2)
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, emoji=None, row=2)
     async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         for child in self.children:
             child.disabled = True
@@ -421,7 +448,7 @@ class CategorySelect(discord.ui.Select):
     def __init__(self, shop_view: ShopView):
         self.shop_view = shop_view
         options = [
-            discord.SelectOption(label=label.split(" ", 1)[1], value=key, emoji=label.split(" ", 1)[0])
+            discord.SelectOption(label=label.split(" ", 1)[1], value=key, emoji=None)
             for key, label in CATEGORY_LABELS.items()
         ]
         super().__init__(
@@ -454,7 +481,7 @@ class ItemSelect(discord.ui.Select):
                 label=name,
                 value=item_id,
                 description=f"{cost} tokens • {'Owned' if owned else 'Unlock permanently'}",
-                emoji="✅" if owned else "🔓",
+                emoji=None,
             ))
         super().__init__(
             placeholder="Select an item to view details...",
@@ -470,27 +497,34 @@ class ItemSelect(discord.ui.Select):
 
 
 class WorkspaceSelect(discord.ui.Select):
-    """Lets members switch between their inventory and profile-card studio."""
+    """One navigation dropdown shared by Shop, Inventory, and Profile Studio."""
     def __init__(self, parent_view, current: str):
         self.parent_view = parent_view
         options = [
             discord.SelectOption(
+                label="Prestige Shop",
+                value="shop",
+                description="Browse and purchase profile cosmetics",
+                emoji=None,
+                default=current == "shop",
+            ),
+            discord.SelectOption(
                 label="Inventory & Equipment",
                 value="inventory",
-                description="Browse owned cosmetics and equip items",
-                emoji="🎒",
+                description="Manage owned cosmetics and titles",
+                emoji=None,
                 default=current == "inventory",
             ),
             discord.SelectOption(
                 label="Profile Card Studio",
                 value="studio",
-                description="Build and preview a temporary card loadout",
-                emoji="🎨",
+                description="Customize and preview your profile card",
+                emoji=None,
                 default=current == "studio",
             ),
         ]
         super().__init__(
-            placeholder="Switch ONYX workspace...",
+            placeholder="ONYX Hub • Switch section...",
             min_values=1,
             max_values=1,
             options=options,
@@ -505,8 +539,8 @@ class WorkspaceSelect(discord.ui.Select):
         if destination == "inventory":
             new_view = InventoryView(cog, user_id)
             embed = await cog._inventory_embed(user_id)
-            content = "Opened your ONYX inventory."
-        else:
+            content = "🎒 **ONYX Inventory & Equipment**"
+        elif destination == "studio":
             levels = cog._levels_cog()
             if not levels:
                 return await interaction.response.send_message(
@@ -518,7 +552,13 @@ class WorkspaceSelect(discord.ui.Select):
             titles = await cog._earned_titles(user_id)
             new_view = ProfilePreviewView(cog, user_id, equipped, owned, titles)
             embed = new_view.make_embed()
-            content = "Opened your Profile Card Studio."
+            content = "🎨 **ONYX Profile Card Studio**"
+        else:
+            balance = await cog._wallet(user_id)
+            owned = await cog._owned(user_id)
+            new_view = ShopView(cog, user_id, balance, owned)
+            embed = cog._shop_embed(balance, owned=owned)
+            content = "🛒 **ONYX Prestige Shop**"
 
         await interaction.response.edit_message(content=content, embed=embed, view=new_view)
 
@@ -554,7 +594,7 @@ class InventoryView(discord.ui.View):
             embed=await self.cog._inventory_embed(self.user_id), view=self
         )
 
-    @discord.ui.button(label="Equip Selected", style=discord.ButtonStyle.success, emoji="✓", row=2)
+    @discord.ui.button(label="Equip Selected", style=discord.ButtonStyle.success, emoji=None, row=2)
     async def equip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected:
             return await interaction.response.send_message("Select an owned item first.", ephemeral=True)
@@ -579,7 +619,7 @@ class InventoryView(discord.ui.View):
             embed=await self.cog._inventory_embed(self.user_id), view=self,
         )
 
-    @discord.ui.button(label="Preview", style=discord.ButtonStyle.primary, emoji="👁️", row=2)
+    @discord.ui.button(label="Preview", style=discord.ButtonStyle.primary, emoji=None, row=2)
     async def preview_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected:
             return await interaction.response.send_message("Select an item to preview first.", ephemeral=True)
@@ -613,7 +653,7 @@ class InventoryView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Unequip Slot", style=discord.ButtonStyle.secondary, emoji="↩️", row=2)
+    @discord.ui.button(label="Unequip Slot", style=discord.ButtonStyle.secondary, emoji=None, row=2)
     async def unequip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         category = self.category
         await self.cog._equipped(self.user_id)
@@ -626,7 +666,7 @@ class InventoryView(discord.ui.View):
             embed=await self.cog._inventory_embed(self.user_id), view=self,
         )
 
-    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, emoji="🔄", row=2)
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, emoji=None, row=2)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(
             embed=await self.cog._inventory_embed(self.user_id), view=self
@@ -637,10 +677,10 @@ class InventoryCategorySelect(discord.ui.Select):
     def __init__(self, view: InventoryView):
         self.inventory_view = view
         options = [
-            discord.SelectOption(label=label.split(" ", 1)[1], value=key, emoji=label.split(" ", 1)[0])
+            discord.SelectOption(label=label.split(" ", 1)[1], value=key, emoji=None)
             for key, label in CATEGORY_LABELS.items()
         ]
-        options.append(discord.SelectOption(label="Titles", value="title", emoji="🏆"))
+        options.append(discord.SelectOption(label="Titles", value="title", emoji=None))
         super().__init__(placeholder="Choose an equipment slot...", min_values=1, max_values=1, options=options, row=0)
 
     async def callback(self, interaction: discord.Interaction):
@@ -761,7 +801,7 @@ class ProfilePreviewView(discord.ui.View):
         self.add_item(PreviewItemSelect(self, self.item_options()))
         await interaction.response.edit_message(content=content, embed=self.make_embed(), view=self)
 
-    @discord.ui.button(label="Preview Card", style=discord.ButtonStyle.primary, emoji="👁️", row=2)
+    @discord.ui.button(label="Preview Card", style=discord.ButtonStyle.primary, emoji=None, row=2)
     async def preview_card_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         levels = self.cog._levels_cog()
         if not levels:
@@ -781,7 +821,7 @@ class ProfilePreviewView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Apply Changes", style=discord.ButtonStyle.success, emoji="✓", row=2)
+    @discord.ui.button(label="Apply Changes", style=discord.ButtonStyle.success, emoji=None, row=2)
     async def apply_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog._equipped(self.user_id)
         for column in ("frame_id", "theme_id", "emblem_id", "effect_id", "title_id"):
@@ -796,7 +836,7 @@ class ProfilePreviewView(discord.ui.View):
             view=self,
         )
 
-    @discord.ui.button(label="Reset Preview", style=discord.ButtonStyle.secondary, emoji="↩️", row=2)
+    @discord.ui.button(label="Reset Preview", style=discord.ButtonStyle.secondary, emoji=None, row=2)
     async def reset_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.pending = dict(self.original)
         await interaction.response.edit_message(
@@ -810,11 +850,11 @@ class PreviewCategorySelect(discord.ui.Select):
     def __init__(self, preview: ProfilePreviewView):
         self.preview = preview
         options = [
-            discord.SelectOption(label="Frames", value="frame", emoji="🖼️"),
-            discord.SelectOption(label="Themes", value="theme", emoji="🎨"),
-            discord.SelectOption(label="Emblems", value="emblem", emoji="🏅"),
-            discord.SelectOption(label="Effects", value="effect", emoji="✨"),
-            discord.SelectOption(label="Titles", value="title", emoji="🏆"),
+            discord.SelectOption(label="Frames", value="frame", emoji=None),
+            discord.SelectOption(label="Themes", value="theme", emoji=None),
+            discord.SelectOption(label="Emblems", value="emblem", emoji=None),
+            discord.SelectOption(label="Effects", value="effect", emoji=None),
+            discord.SelectOption(label="Titles", value="title", emoji=None),
         ]
         super().__init__(placeholder="Choose a slot to customize...", min_values=1, max_values=1, options=options, row=0)
 
