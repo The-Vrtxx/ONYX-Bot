@@ -10,6 +10,7 @@ import asyncio
 import io
 import math
 import re
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 import discord
@@ -272,6 +273,13 @@ class PrestigeShop(commands.Cog):
         output.seek(0)
         return discord.File(output, filename="onyx-shop-art.png")
 
+    def _shop_welcome_art(self):
+        """Return the ONYX welcome banner shown before a member selects an item."""
+        asset = Path(__file__).resolve().parent.parent / "assets" / "onyx_shop_welcome.png"
+        if not asset.exists():
+            raise FileNotFoundError(f"Missing ONYX shop welcome artwork: {asset}")
+        return discord.File(str(asset), filename="onyx-shop-welcome.png")
+
     def _shop_embed(self, balance: int, category: str = "frame",
                     selected: str | None = None, owned=None):
         owned = owned or set()
@@ -301,6 +309,7 @@ class PrestigeShop(commands.Cog):
             )
             embed.set_thumbnail(url="attachment://onyx-shop-art.png")
         else:
+            embed.set_image(url="attachment://onyx-shop-welcome.png")
             embed.add_field(
                 name="HOW TO SHOP",
                 value="1. Pick a category below.\n2. Select an item.\n3. Press **Buy Item** to unlock it permanently.",
@@ -341,7 +350,7 @@ class PrestigeShop(commands.Cog):
             balance = await self._wallet(user_id)
             owned = await self._owned(user_id)
             view = ShopView(self, user_id, balance, owned)
-            await ctx.send(embed=self._shop_embed(balance, owned=owned), file=self._shop_art("frame"), view=view)
+            await ctx.send(embed=self._shop_embed(balance, owned=owned), file=self._shop_welcome_art(), view=view)
 
     @commands.command(name="onyx", aliases=["menu", "hub"])
     @commands.guild_only()
@@ -489,7 +498,7 @@ class ShopView(discord.ui.View):
         self.owned = await self.cog._owned(self.user_id)
         await interaction.response.edit_message(
             embed=self.cog._shop_embed(self.balance, self.category, self.selected, self.owned),
-            attachments=[self.cog._shop_art(self.category, self.selected)],
+            attachments=[self.cog._shop_art(self.category, self.selected) if self.selected else self.cog._shop_welcome_art()],
             view=self,
         )
 
@@ -530,24 +539,34 @@ class ShopView(discord.ui.View):
                 "The Levels cog is not loaded. Please try again after it starts.",
                 ephemeral=True,
             )
-        row = await levels.profile(self.user_id)
-        titles = await levels.sync_unlocked_titles(self.user_id, row)
-        cosmetics = await levels.equipped_cosmetics(self.user_id)
-        column = COLUMN_BY_CATEGORY[self.category]
-        cosmetics[column] = self.selected
-        card = levels.render_onyx_profile_card(
-            display_name=interaction.user.display_name,
-            row=row,
-            unlocked_titles=titles,
-            tokens=await levels.prestige_tokens(self.user_id),
-            cosmetics=cosmetics,
-        )
-        name = display_item(self.category, self.selected)
-        await interaction.response.send_message(
-            content=f"**{name}** — preview only. This has not been equipped or purchased.",
-            file=discord.File(card, filename="onyx-cosmetic-preview.png"),
-            ephemeral=True,
-        )
+        # Acknowledge immediately so Discord does not expire the component interaction
+        # while database reads and PNG rendering are in progress.
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            row = await levels.profile(self.user_id)
+            titles = await levels.sync_unlocked_titles(self.user_id, row)
+            cosmetics = await levels.equipped_cosmetics(self.user_id)
+            column = COLUMN_BY_CATEGORY[self.category]
+            cosmetics[column] = self.selected
+            card = levels.render_onyx_profile_card(
+                display_name=interaction.user.display_name,
+                row=row,
+                unlocked_titles=titles,
+                tokens=await levels.prestige_tokens(self.user_id),
+                cosmetics=cosmetics,
+            )
+            name = display_item(self.category, self.selected)
+            await interaction.followup.send(
+                content=f"**{name}** — preview only. This has not been equipped or purchased.",
+                file=discord.File(card, filename="onyx-cosmetic-preview.png"),
+                ephemeral=True,
+            )
+        except Exception:
+            await interaction.followup.send(
+                "I couldn't generate that preview. Please try again; the error has been logged.",
+                ephemeral=True,
+            )
+            raise
 
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, emoji=None, row=2)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -685,7 +704,7 @@ class WorkspaceSelect(discord.ui.Select):
             content = "🛒 **ONYX Prestige Shop**"
 
         if destination == "shop":
-            await interaction.response.edit_message(content=content, embed=embed, attachments=[cog._shop_art("frame")], view=new_view)
+            await interaction.response.edit_message(content=content, embed=embed, attachments=[cog._shop_welcome_art()], view=new_view)
         else:
             await interaction.response.edit_message(content=content, embed=embed, attachments=[], view=new_view)
 
@@ -753,32 +772,40 @@ class InventoryView(discord.ui.View):
         levels = self.cog._levels_cog()
         if not levels:
             return await interaction.response.send_message("The Levels cog is not loaded.", ephemeral=True)
-        row = await levels.profile(self.user_id)
-        titles = await levels.sync_unlocked_titles(self.user_id, row)
-        cosmetics = await levels.equipped_cosmetics(self.user_id)
-        if self.category in ("frame", "theme", "effect"):
-            cosmetics[COLUMN_BY_CATEGORY[self.category]] = self.selected
-        elif self.category == "title":
-            earned = {slugify(title): title for title in titles}
-            if self.selected not in earned:
-                return await interaction.response.send_message("That title is not unlocked.", ephemeral=True)
-            cosmetics["title_id"] = earned[self.selected]
-        # Emblems are rank-based in the current card design; show the selected emblem in the preview note.
-        card = levels.render_onyx_profile_card(
-            display_name=interaction.user.display_name,
-            row=row,
-            unlocked_titles=titles,
-            tokens=await levels.prestige_tokens(self.user_id),
-            cosmetics=cosmetics,
-        )
-        note = "Preview only — nothing has been equipped."
-        if self.category == "emblem":
-            note += " Shop emblem selection is saved to inventory, but the current profile renderer uses rank emblems."
-        await interaction.response.send_message(
-            content=note,
-            file=discord.File(card, filename="onyx-inventory-preview.png"),
-            ephemeral=True,
-        )
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            row = await levels.profile(self.user_id)
+            titles = await levels.sync_unlocked_titles(self.user_id, row)
+            cosmetics = await levels.equipped_cosmetics(self.user_id)
+            if self.category in ("frame", "theme", "effect"):
+                cosmetics[COLUMN_BY_CATEGORY[self.category]] = self.selected
+            elif self.category == "title":
+                earned = {slugify(title): title for title in titles}
+                if self.selected not in earned:
+                    return await interaction.followup.send("That title is not unlocked.", ephemeral=True)
+                cosmetics["title_id"] = earned[self.selected]
+            # Emblems are rank-based in the current card design; show the selected emblem in the preview note.
+            card = levels.render_onyx_profile_card(
+                display_name=interaction.user.display_name,
+                row=row,
+                unlocked_titles=titles,
+                tokens=await levels.prestige_tokens(self.user_id),
+                cosmetics=cosmetics,
+            )
+            note = "Preview only — nothing has been equipped."
+            if self.category == "emblem":
+                note += " Shop emblem selection is saved to inventory, but the current profile renderer uses rank emblems."
+            await interaction.followup.send(
+                content=note,
+                file=discord.File(card, filename="onyx-inventory-preview.png"),
+                ephemeral=True,
+            )
+        except Exception:
+            await interaction.followup.send(
+                "I couldn't generate that preview. Please try again; the error has been logged.",
+                ephemeral=True,
+            )
+            raise
 
     @discord.ui.button(label="Unequip Slot", style=discord.ButtonStyle.secondary, emoji=None, row=2)
     async def unequip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -933,20 +960,28 @@ class ProfilePreviewView(discord.ui.View):
         levels = self.cog._levels_cog()
         if not levels:
             return await interaction.response.send_message("The Levels cog is not loaded.", ephemeral=True)
-        row = await levels.profile(self.user_id)
-        titles = await levels.sync_unlocked_titles(self.user_id, row)
-        card = levels.render_onyx_profile_card(
-            display_name=interaction.user.display_name,
-            row=row,
-            unlocked_titles=titles,
-            tokens=await levels.prestige_tokens(self.user_id),
-            cosmetics=dict(self.pending),
-        )
-        await interaction.response.send_message(
-            content="👁️ **Temporary preview** — your equipped cosmetics have not changed.",
-            file=discord.File(card, filename="onyx-profile-preview.png"),
-            ephemeral=True,
-        )
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            row = await levels.profile(self.user_id)
+            titles = await levels.sync_unlocked_titles(self.user_id, row)
+            card = levels.render_onyx_profile_card(
+                display_name=interaction.user.display_name,
+                row=row,
+                unlocked_titles=titles,
+                tokens=await levels.prestige_tokens(self.user_id),
+                cosmetics=dict(self.pending),
+            )
+            await interaction.followup.send(
+                content="👁️ **Temporary preview** — your equipped cosmetics have not changed.",
+                file=discord.File(card, filename="onyx-profile-preview.png"),
+                ephemeral=True,
+            )
+        except Exception:
+            await interaction.followup.send(
+                "I couldn't generate that preview. Please try again; the error has been logged.",
+                ephemeral=True,
+            )
+            raise
 
     @discord.ui.button(label="Apply Changes", style=discord.ButtonStyle.success, emoji=None, row=2)
     async def apply_button(self, interaction: discord.Interaction, button: discord.ui.Button):
