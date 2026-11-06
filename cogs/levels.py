@@ -175,9 +175,9 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
     draw.text((60, 190), stage, font=font_stage, fill=accent)
 
     # Show the highest permanently unlocked Prestige Master title.
-    current_title = unlocked_titles[-1] if unlocked_titles else None
+    current_title = cosmetics.get("title_id") or (unlocked_titles[-1] if unlocked_titles else None)
     if current_title:
-        title_text = f"TITLE  •  {current_title.upper()}"
+        title_text = f"TITLE  •  {str(current_title).upper()}"
         draw.text((60, 232), _fit_text(draw, title_text, font_label, 720),
                   font=font_label, fill=(235, 242, 248))
 
@@ -193,6 +193,13 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
         image_rgba.alpha_composite(insignia, (emblem_x, emblem_y))
         image = image_rgba.convert("RGB")
         draw = ImageDraw.Draw(image)
+
+    # Optional shop emblem label beneath the progression emblem.
+    shop_emblem = str(cosmetics.get("emblem_id") or "default").lower()
+    if shop_emblem != "default":
+        emblem_label = shop_emblem.replace("_", " ").upper()
+        draw.text((805, 245), _fit_text(draw, emblem_label, font_label, 190),
+                  font=font_label, fill=accent)
 
     # Current-level XP progress only: no token, title, lifetime-XP, or theme text.
     needed = xp_needed(active_level)

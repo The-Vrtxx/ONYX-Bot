@@ -243,13 +243,20 @@ class PrestigeShop(commands.Cog):
     @commands.guild_only()
     async def pinventory(self, ctx, member: discord.Member = None):
         member = member or ctx.author
-        owned = await self._owned(member.id)
-        balance = await self._wallet(member.id)
-        equipped = await self._equipped(member.id)
+        embed = await self._inventory_embed(member.id, member.display_name)
+        view = InventoryView(self, member.id) if member.id == ctx.author.id else None
+        await ctx.send(embed=embed, view=view)
 
+    async def _inventory_embed(self, user_id: int, display_name: str = "Your"):
+        owned = await self._owned(user_id)
+        balance = await self._wallet(user_id)
+        equipped = await self._equipped(user_id)
         embed = discord.Embed(
-            title=f"{member.display_name}  /  PRESTIGE INVENTORY",
-            description=f"**Prestige Tokens:** {balance}",
+            title=f"{display_name}  /  ONYX INVENTORY",
+            description=(
+                f"**Prestige Tokens:** {balance}\n"
+                "Choose a slot below, select an owned item, then equip or preview it."
+            ),
             color=discord.Color.from_rgb(25, 190, 190),
         )
         for category in SHOP:
@@ -261,20 +268,20 @@ class PrestigeShop(commands.Cog):
             current = equipped.get(COLUMN_BY_CATEGORY[category]) or DEFAULTS[category]
             current_name = "Default" if current == DEFAULTS[category] else display_item(category, current)
             embed.add_field(
-                name=f"{category.title()}s  •  Equipped: {current_name}",
+                name=f"{category.title()}  •  Equipped: {current_name}",
                 value="\n".join(items) if items else "Nothing unlocked yet.",
                 inline=False,
             )
-
-        titles = await self._earned_titles(member.id)
+        titles = await self._earned_titles(user_id)
         active_title = equipped.get("title_id") or (titles[-1] if titles else None)
         embed.add_field(
-            name="Earned Titles",
-            value=", ".join(titles) if titles else "No Prestige Master titles yet.",
+            name="Prestige Master Titles",
+            value=", ".join(titles) if titles else "No titles unlocked yet.",
             inline=False,
         )
-        embed.add_field(name="Equipped Title", value=active_title or "No title", inline=False)
-        await ctx.send(embed=embed)
+        embed.add_field(name="Equipped Title", value=active_title or "No title selected", inline=False)
+        embed.set_footer(text="Cosmetics are permanent unlocks • Equip one item per slot")
+        return embed
 
     @commands.command(name="pequip", aliases=["prestigeequip"])
     @commands.guild_only()
@@ -381,7 +388,8 @@ class ShopView(discord.ui.View):
     @discord.ui.button(label="Inventory", style=discord.ButtonStyle.primary, emoji="🎒", row=2)
     async def inventory_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
-            "Use `,pinventory` to view your owned items and equipped cosmetics.",
+            embed=await self.cog._inventory_embed(self.user_id),
+            view=InventoryView(self.cog, self.user_id),
             ephemeral=True,
         )
 
@@ -442,6 +450,164 @@ class ItemSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         self.shop_view.selected = self.values[0]
         await self.shop_view.refresh(interaction)
+
+
+class InventoryView(discord.ui.View):
+    """Interactive inventory for equipping, previewing, and resetting cosmetics."""
+    def __init__(self, cog: PrestigeShop, user_id: int):
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.user_id = user_id
+        self.category = "frame"
+        self.selected = None
+        self.add_item(InventoryCategorySelect(self))
+        self.add_item(InventoryItemSelect(self))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "This inventory belongs to someone else. Run `,inventory` to open your own.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def redraw(self, interaction: discord.Interaction):
+        self.selected = None
+        for child in list(self.children):
+            if isinstance(child, InventoryItemSelect):
+                self.remove_item(child)
+        self.add_item(InventoryItemSelect(self))
+        await interaction.response.edit_message(
+            embed=await self.cog._inventory_embed(self.user_id), view=self
+        )
+
+    @discord.ui.button(label="Equip Selected", style=discord.ButtonStyle.success, emoji="✓", row=2)
+    async def equip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected:
+            return await interaction.response.send_message("Select an owned item first.", ephemeral=True)
+        category, item_id = self.category, self.selected
+        if category == "title":
+            titles = await self.cog._earned_titles(self.user_id)
+            title_lookup = {slugify(title): title for title in titles}
+            if item_id not in title_lookup:
+                return await interaction.response.send_message("That title is not unlocked.", ephemeral=True)
+            value = title_lookup[item_id]
+        else:
+            if (category, item_id) not in await self.cog._owned(self.user_id):
+                return await interaction.response.send_message("You do not own that item.", ephemeral=True)
+            value = item_id
+        await self.cog._equipped(self.user_id)
+        await self.cog.bot.db.execute(
+            f"UPDATE onyx_profile_equipped SET {COLUMN_BY_CATEGORY[category]}=? WHERE user_id=?",
+            (value, self.user_id),
+        )
+        await interaction.response.edit_message(
+            content=f"✅ Equipped **{display_item(category, value)}**. Your next `,rank` card will use it.",
+            embed=await self.cog._inventory_embed(self.user_id), view=self,
+        )
+
+    @discord.ui.button(label="Preview", style=discord.ButtonStyle.primary, emoji="👁️", row=2)
+    async def preview_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected:
+            return await interaction.response.send_message("Select an item to preview first.", ephemeral=True)
+        levels = self.cog._levels_cog()
+        if not levels:
+            return await interaction.response.send_message("The Levels cog is not loaded.", ephemeral=True)
+        row = await levels.profile(self.user_id)
+        titles = await levels.sync_unlocked_titles(self.user_id, row)
+        cosmetics = await levels.equipped_cosmetics(self.user_id)
+        if self.category in ("frame", "theme", "effect"):
+            cosmetics[COLUMN_BY_CATEGORY[self.category]] = self.selected
+        elif self.category == "title":
+            earned = {slugify(title): title for title in titles}
+            if self.selected not in earned:
+                return await interaction.response.send_message("That title is not unlocked.", ephemeral=True)
+            cosmetics["title_id"] = earned[self.selected]
+        # Emblems are rank-based in the current card design; show the selected emblem in the preview note.
+        card = levels.render_onyx_profile_card(
+            display_name=interaction.user.display_name,
+            row=row,
+            unlocked_titles=titles,
+            tokens=await levels.prestige_tokens(self.user_id),
+            cosmetics=cosmetics,
+        )
+        note = "Preview only — nothing has been equipped."
+        if self.category == "emblem":
+            note += " Shop emblem selection is saved to inventory, but the current profile renderer uses rank emblems."
+        await interaction.response.send_message(
+            content=note,
+            file=discord.File(card, filename="onyx-inventory-preview.png"),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Unequip Slot", style=discord.ButtonStyle.secondary, emoji="↩️", row=2)
+    async def unequip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        category = self.category
+        await self.cog._equipped(self.user_id)
+        await self.cog.bot.db.execute(
+            f"UPDATE onyx_profile_equipped SET {COLUMN_BY_CATEGORY[category]}=? WHERE user_id=?",
+            (DEFAULTS[category], self.user_id),
+        )
+        await interaction.response.edit_message(
+            content=f"Reset your {category} slot to its default.",
+            embed=await self.cog._inventory_embed(self.user_id), view=self,
+        )
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, emoji="🔄", row=2)
+    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=await self.cog._inventory_embed(self.user_id), view=self
+        )
+
+
+class InventoryCategorySelect(discord.ui.Select):
+    def __init__(self, view: InventoryView):
+        self.inventory_view = view
+        options = [
+            discord.SelectOption(label=label.split(" ", 1)[1], value=key, emoji=label.split(" ", 1)[0])
+            for key, label in CATEGORY_LABELS.items()
+        ]
+        options.append(discord.SelectOption(label="Titles", value="title", emoji="🏆"))
+        super().__init__(placeholder="Choose an equipment slot...", min_values=1, max_values=1, options=options, row=0)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.inventory_view.category = self.values[0]
+        category = self.values[0]
+        if category == "title":
+            items = await self.inventory_view.cog._earned_titles(self.inventory_view.user_id)
+            options = [discord.SelectOption(label=title, value=slugify(title)) for title in items[:25]]
+        else:
+            owned = await self.inventory_view.cog._owned(self.inventory_view.user_id)
+            items = [item_id for owned_category, item_id in sorted(owned) if owned_category == category]
+            options = [discord.SelectOption(label=display_item(category, item_id), value=item_id) for item_id in items[:25]]
+        if not options:
+            options = [discord.SelectOption(label="No items owned in this slot", value="none", description="Purchase or unlock one first")]
+        for child in list(self.inventory_view.children):
+            if isinstance(child, InventoryItemSelect):
+                self.inventory_view.remove_item(child)
+        self.inventory_view.add_item(InventoryItemSelect(self.inventory_view, options))
+        await interaction.response.edit_message(embed=await self.inventory_view.cog._inventory_embed(self.inventory_view.user_id), view=self.inventory_view)
+
+
+class InventoryItemSelect(discord.ui.Select):
+    def __init__(self, view: InventoryView, options=None):
+        self.inventory_view = view
+        options = options or [discord.SelectOption(label="Choose a slot above first", value="none")]
+        super().__init__(placeholder="Select an owned item...", min_values=1, max_values=1, options=options[:25], row=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            return await interaction.response.send_message(
+                "Choose a category first, then select one of your owned items.",
+                ephemeral=True,
+            )
+        self.inventory_view.selected = self.values[0]
+        await interaction.response.send_message(
+            f"Selected **{display_item(self.inventory_view.category, self.values[0])}**. Use Equip Selected or Preview.",
+            ephemeral=True,
+        )
+
 
 
 async def setup(bot):
