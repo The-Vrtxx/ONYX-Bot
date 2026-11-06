@@ -103,7 +103,7 @@ def _fit_text(draw, text, font, max_width):
 
 def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
                              tokens: int, cosmetics=None) -> BytesIO:
-    """Render the user's ONYX profile as a PNG attachment."""
+    """Render a clean ONYX profile card with rank emblem and XP progress."""
     cosmetics = cosmetics or {}
     theme_key = str(cosmetics.get("theme_id") or "onyx").lower()
     frame_key = str(cosmetics.get("frame_id") or "default").lower()
@@ -111,30 +111,35 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
     theme = CARD_THEMES.get(theme_key, CARD_THEMES["onyx"])
     frame_color = CARD_FRAMES.get(frame_key, CARD_FRAMES["default"])
     accent = theme[2]
-    width, height = 1100, 430
+    width, height = 1100, 360
 
     image = Image.new("RGB", (width, height), theme[0])
     pixels = image.load()
     for x in range(width):
         ratio = x / max(1, width - 1)
-        color = tuple(int(theme[0][i] * (1-ratio) + theme[1][i] * ratio) for i in range(3))
+        color = tuple(
+            int(theme[0][i] * (1 - ratio) + theme[1][i] * ratio)
+            for i in range(3)
+        )
         for y in range(height):
             pixels[x, y] = color
 
     draw = ImageDraw.Draw(image)
-    # Subtle geometric background accents.
-    draw.ellipse((790, -210, 1240, 240), fill=tuple(max(0, c - 5) for c in theme[1]))
-    draw.ellipse((900, 190, 1220, 510), fill=tuple(max(0, c - 8) for c in theme[1]))
-    draw.rounded_rectangle((18, 18, width-18, height-18), radius=28,
+    draw.ellipse((790, -210, 1240, 240),
+                 fill=tuple(max(0, c - 5) for c in theme[1]))
+    draw.ellipse((900, 190, 1220, 510),
+                 fill=tuple(max(0, c - 8) for c in theme[1]))
+    draw.rounded_rectangle((18, 18, width - 18, height - 18), radius=28,
                            outline=frame_color, width=5)
-    draw.rounded_rectangle((31, 31, width-31, height-31), radius=22,
-                           outline=tuple(min(255, int(c * 0.55 + 40)) for c in frame_color), width=1)
+    draw.rounded_rectangle((31, 31, width - 31, height - 31), radius=22,
+                           outline=tuple(min(255, int(c * 0.55 + 40))
+                                         for c in frame_color), width=1)
 
     effect_color = CARD_EFFECTS.get(effect_key)
     if effect_color:
         glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
         gd = ImageDraw.Draw(glow)
-        gd.rounded_rectangle((25, 25, width-25, height-25), radius=28,
+        gd.rounded_rectangle((25, 25, width - 25, height - 25), radius=28,
                              outline=(*effect_color, 100), width=15)
         glow = glow.filter(ImageFilter.GaussianBlur(12))
         image = Image.alpha_composite(image.convert("RGBA"), glow).convert("RGB")
@@ -142,92 +147,65 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
 
     font_brand = _card_font(25, True)
     font_name = _card_font(43, True)
-    font_stage = _card_font(27, True)
-    font_title = _card_font(31, True)
+    font_stage = _card_font(25, True)
     font_label = _card_font(16, True)
-    font_value = _card_font(22, True)
-    font_small = _card_font(17)
 
     draw.text((58, 48), "ONYX", font=font_brand, fill=accent)
-    draw.text((155, 55), "GLOBAL PROFILE", font=font_label, fill=(165, 185, 202))
-    draw.line((58, 98, width-58, 98), fill=tuple(int(c * .7) for c in accent), width=2)
+    draw.text((155, 55), "GLOBAL PROFILE", font=font_label,
+              fill=(165, 185, 202))
+    draw.line((58, 98, width - 58, 98),
+              fill=tuple(int(c * 0.7) for c in accent), width=2)
 
-    draw.text((58, 125), _fit_text(draw, display_name, font_name, 620),
+    draw.text((58, 125), _fit_text(draw, display_name, font_name, 650),
               font=font_name, fill=(245, 249, 252))
 
     if row["master_mode"]:
         stage = f"PRESTIGE MASTER  •  LEVEL {int(row['master_level']):,} / 1,000"
         active_level = int(row["master_level"])
+        emblem_key = "master"
     else:
         prestige = int(row["prestige"])
-        stage = f"PRESTIGE {prestige}  •  LEVEL {int(row['level']):,} / 60" if prestige else f"LEVEL {int(row['level']):,} / 60"
+        stage = (
+            f"PRESTIGE {prestige}  •  LEVEL {int(row['level']):,} / 60"
+            if prestige else f"LEVEL {int(row['level']):,} / 60"
+        )
         active_level = int(row["level"])
-    draw.text((60, 185), stage, font=font_stage, fill=accent)
+        emblem_key = prestige
 
-    earned_title = unlocked_titles[-1] if unlocked_titles else "No Master Title Yet"
-    selected_title = str(cosmetics.get("title_id") or earned_title)
-    if selected_title not in unlocked_titles:
-        selected_title = earned_title
-    # The rank insignia is tied to the user's actual progression, so the
-    # matching supplied ONYX artwork always appears on the card.
-    emblem_key = "master" if row["master_mode"] else int(row["prestige"])
-    emblem_label = (
-        "PRESTIGE MASTER EMBLEM" if emblem_key == "master"
-        else f"PRESTIGE {emblem_key} EMBLEM"
-    )
+    draw.text((60, 190), stage, font=font_stage, fill=accent)
 
-    # Equipped title panel.
-    draw.rounded_rectangle((58, 238, 650, 315), radius=15,
-                           fill=(8, 14, 25), outline=accent, width=2)
-    draw.text((78, 250), "EQUIPPED TITLE", font=font_label, fill=(145, 165, 180))
-    draw.text((78, 274), _fit_text(draw, selected_title, font_title, 545),
-              font=font_title, fill=(245, 249, 252))
-
-    # Right-side emblem / token display.
-    draw.rounded_rectangle((710, 125, 1038, 315), radius=18,
-                           fill=(8, 14, 25), outline=accent, width=2)
-    draw.text((740, 145), emblem_label, font=font_label, fill=(155, 175, 190))
-    emblem_file = PRESTIGE_EMBLEMS[emblem_key]
-    emblem_path = ASSET_DIR / emblem_file
+    # Display the matching supplied Prestige emblem without extra labels.
+    emblem_path = ASSET_DIR / PRESTIGE_EMBLEMS[emblem_key]
     if emblem_path.is_file():
         with Image.open(emblem_path) as source_emblem:
             insignia = source_emblem.convert("RGBA")
-            insignia.thumbnail((126, 126), Image.Resampling.LANCZOS)
+            insignia.thumbnail((170, 170), Image.Resampling.LANCZOS)
         image_rgba = image.convert("RGBA")
-        emblem_x = 874 - insignia.width // 2
-        emblem_y = 229 - insignia.height // 2
+        emblem_x = 890 - insignia.width // 2
+        emblem_y = 185 - insignia.height // 2
         image_rgba.alpha_composite(insignia, (emblem_x, emblem_y))
         image = image_rgba.convert("RGB")
         draw = ImageDraw.Draw(image)
-    else:
-        # Clear fallback if an asset is accidentally omitted from deployment.
-        draw.text((740, 190), "ONYX", font=font_title, fill=accent)
-    draw.text((740, 270), f"{int(row['prestige'])}/10 PRESTIGE", font=font_value, fill=(245, 249, 252))
-    draw.text((740, 298), f"{tokens} TOKENS", font=font_value, fill=accent)
 
-    # XP progress.
+    # Current-level XP progress only: no token, title, lifetime-XP, or theme text.
     needed = xp_needed(active_level)
     current_xp = int(row["xp"])
     ratio = min(1.0, max(0.0, current_xp / needed)) if needed else 1.0
-    draw.text((60, 333), f"XP  {current_xp:,} / {needed:,}", font=font_label, fill=(205, 220, 230))
-    draw.rounded_rectangle((260, 337, 700, 356), radius=9, fill=(5, 10, 18))
+    draw.text((60, 275), f"XP  {current_xp:,} / {needed:,}",
+              font=font_label, fill=(205, 220, 230))
+    draw.rounded_rectangle((260, 278, 900, 298), radius=10, fill=(5, 10, 18))
     if ratio > 0:
-        draw.rounded_rectangle((260, 337, 260 + int(440 * ratio), 356),
-                               radius=9, fill=accent)
-    draw.text((725, 333), f"{ratio*100:.1f}%", font=font_label, fill=(235, 242, 248))
-
-    draw.text((60, 390), f"LIFETIME XP  {int(row['lifetime_xp']):,}",
-              font=font_small, fill=(165, 185, 202))
-    draw.text((390, 390), f"UNLOCKED TITLES  {len(unlocked_titles)}",
-              font=font_small, fill=(165, 185, 202))
-    draw.text((785, 390), f"THEME  {theme_key.upper()}",
-              font=font_small, fill=(165, 185, 202))
+        draw.rounded_rectangle(
+            (260, 278, 260 + int(640 * ratio), 298),
+            radius=10, fill=accent
+        )
+    draw.text((920, 275), f"{ratio * 100:.1f}%",
+              font=font_label, fill=(235, 242, 248))
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     output.seek(0)
     return output
-
 
 def xp_needed(level: int) -> int:
     return max(1, int(BASE_XP + LINEAR_XP * level + QUADRATIC_XP * level * level))
