@@ -181,7 +181,7 @@ class PrestigeShop(commands.Cog):
         if not levels:
             return []
         row = await levels.profile(user_id)
-        return await levels.sync_unlocked_titles(user_id, row)
+        return levels.unlocked_titles(row)
 
     async def _purchase(self, user_id: int, category: str, item_id: str):
         """Return (success, message, new_balance)."""
@@ -546,7 +546,7 @@ class ShopView(discord.ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             row = await levels.profile(self.user_id)
-            titles = await levels.sync_unlocked_titles(self.user_id, row)
+            titles = levels.unlocked_titles(row)
             cosmetics = await levels.equipped_cosmetics(self.user_id)
             column = COLUMN_BY_CATEGORY[self.category]
             cosmetics[column] = self.selected
@@ -777,7 +777,7 @@ class InventoryView(discord.ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             row = await levels.profile(self.user_id)
-            titles = await levels.sync_unlocked_titles(self.user_id, row)
+            titles = levels.unlocked_titles(row)
             cosmetics = await levels.equipped_cosmetics(self.user_id)
             if self.category in ("frame", "theme", "emblem", "effect"):
                 cosmetics[COLUMN_BY_CATEGORY[self.category]] = self.selected
@@ -962,7 +962,7 @@ class ProfilePreviewView(discord.ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             row = await levels.profile(self.user_id)
-            titles = await levels.sync_unlocked_titles(self.user_id, row)
+            titles = levels.unlocked_titles(row)
             card = render_onyx_profile_card(
                 display_name=interaction.user.display_name,
                 row=row,
