@@ -283,6 +283,23 @@ class PrestigeShop(commands.Cog):
         embed.set_footer(text="Cosmetics are permanent unlocks • Equip one item per slot")
         return embed
 
+    @commands.command(name="preview", aliases=["cardpreview", "profilepreview"])
+    @commands.guild_only()
+    async def preview(self, ctx):
+        """Open a private cosmetic loadout preview before applying changes."""
+        levels = self._levels_cog()
+        if not levels:
+            return await ctx.send("The Levels cog is not loaded. Please try again after it starts.")
+        equipped = await self._equipped(ctx.author.id)
+        owned = await self._owned(ctx.author.id)
+        titles = await self._earned_titles(ctx.author.id)
+        view = ProfilePreviewView(self, ctx.author.id, equipped, owned, titles)
+        await ctx.send(
+            embed=view.make_embed(),
+            view=view,
+            delete_after=None,
+        )
+
     @commands.command(name="pequip", aliases=["prestigeequip"])
     @commands.guild_only()
     async def pequip(self, ctx, category: str, *, item: str):
@@ -452,6 +469,60 @@ class ItemSelect(discord.ui.Select):
         await self.shop_view.refresh(interaction)
 
 
+class WorkspaceSelect(discord.ui.Select):
+    """Lets members switch between their inventory and profile-card studio."""
+    def __init__(self, parent_view, current: str):
+        self.parent_view = parent_view
+        options = [
+            discord.SelectOption(
+                label="Inventory & Equipment",
+                value="inventory",
+                description="Browse owned cosmetics and equip items",
+                emoji="🎒",
+                default=current == "inventory",
+            ),
+            discord.SelectOption(
+                label="Profile Card Studio",
+                value="studio",
+                description="Build and preview a temporary card loadout",
+                emoji="🎨",
+                default=current == "studio",
+            ),
+        ]
+        super().__init__(
+            placeholder="Switch ONYX workspace...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=3,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        cog = self.parent_view.cog
+        user_id = self.parent_view.user_id
+        destination = self.values[0]
+
+        if destination == "inventory":
+            new_view = InventoryView(cog, user_id)
+            embed = await cog._inventory_embed(user_id)
+            content = "Opened your ONYX inventory."
+        else:
+            levels = cog._levels_cog()
+            if not levels:
+                return await interaction.response.send_message(
+                    "The Levels cog is not loaded. Please try again after it starts.",
+                    ephemeral=True,
+                )
+            equipped = await cog._equipped(user_id)
+            owned = await cog._owned(user_id)
+            titles = await cog._earned_titles(user_id)
+            new_view = ProfilePreviewView(cog, user_id, equipped, owned, titles)
+            embed = new_view.make_embed()
+            content = "Opened your Profile Card Studio."
+
+        await interaction.response.edit_message(content=content, embed=embed, view=new_view)
+
+
 class InventoryView(discord.ui.View):
     """Interactive inventory for equipping, previewing, and resetting cosmetics."""
     def __init__(self, cog: PrestigeShop, user_id: int):
@@ -462,6 +533,7 @@ class InventoryView(discord.ui.View):
         self.selected = None
         self.add_item(InventoryCategorySelect(self))
         self.add_item(InventoryItemSelect(self))
+        self.add_item(WorkspaceSelect(self, "inventory"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -608,6 +680,183 @@ class InventoryItemSelect(discord.ui.Select):
             ephemeral=True,
         )
 
+
+
+class ProfilePreviewView(discord.ui.View):
+    """Temporary loadout builder; changes are only saved after Apply Changes."""
+    def __init__(self, cog: PrestigeShop, user_id: int, equipped, owned, titles):
+        super().__init__(timeout=240)
+        self.cog = cog
+        self.user_id = user_id
+        self.owned = owned
+        self.titles = titles
+        self.original = {
+            "frame_id": equipped.get("frame_id") or DEFAULTS["frame"],
+            "theme_id": equipped.get("theme_id") or DEFAULTS["theme"],
+            "emblem_id": equipped.get("emblem_id") or DEFAULTS["emblem"],
+            "effect_id": equipped.get("effect_id") or DEFAULTS["effect"],
+            "title_id": equipped.get("title_id"),
+        }
+        self.pending = dict(self.original)
+        self.category = "frame"
+        self.add_item(PreviewCategorySelect(self))
+        self.add_item(PreviewItemSelect(self))
+        self.add_item(WorkspaceSelect(self, "studio"))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "This preview belongs to someone else. Run `,preview` to open your own.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    def make_embed(self):
+        embed = discord.Embed(
+            title="ONYX  /  PROFILE CARD STUDIO",
+            description=(
+                "Build a cosmetic combination and preview the card before saving. "
+                "Nothing changes until you press **Apply Changes**."
+            ),
+            color=discord.Color.from_rgb(25, 190, 190),
+        )
+        labels = {
+            "frame_id": "Frame", "theme_id": "Theme", "emblem_id": "Emblem",
+            "effect_id": "Effect", "title_id": "Title",
+        }
+        values = []
+        for key, label in labels.items():
+            value = self.pending.get(key)
+            if key == "title_id":
+                shown = value or "No title"
+            elif value == DEFAULTS[key.replace("_id", "")]:
+                shown = "Default"
+            else:
+                shown = display_item(key.replace("_id", ""), value)
+            changed = "  •  modified" if value != self.original.get(key) else ""
+            values.append(f"**{label}:** {shown}{changed}")
+        embed.add_field(name="CURRENT PREVIEW LOADOUT", value="\n".join(values), inline=False)
+        embed.set_footer(text="Preview is temporary • Apply Changes saves all selected slots")
+        return embed
+
+    def item_options(self):
+        category = self.category
+        if category == "title":
+            options = [discord.SelectOption(label="No title", value="__default__")]
+            options.extend(discord.SelectOption(label=title, value=slugify(title)) for title in self.titles[:24])
+            return options[:25]
+        options = [discord.SelectOption(label="Default", value="__default__")]
+        options.extend(
+            discord.SelectOption(label=display_item(category, item_id), value=item_id)
+            for owned_category, item_id in sorted(self.owned)
+            if owned_category == category
+        )
+        return options[:25]
+
+    async def redraw(self, interaction: discord.Interaction, content=None):
+        for child in list(self.children):
+            if isinstance(child, PreviewItemSelect):
+                self.remove_item(child)
+        self.add_item(PreviewItemSelect(self, self.item_options()))
+        await interaction.response.edit_message(content=content, embed=self.make_embed(), view=self)
+
+    @discord.ui.button(label="Preview Card", style=discord.ButtonStyle.primary, emoji="👁️", row=2)
+    async def preview_card_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        levels = self.cog._levels_cog()
+        if not levels:
+            return await interaction.response.send_message("The Levels cog is not loaded.", ephemeral=True)
+        row = await levels.profile(self.user_id)
+        titles = await levels.sync_unlocked_titles(self.user_id, row)
+        card = levels.render_onyx_profile_card(
+            display_name=interaction.user.display_name,
+            row=row,
+            unlocked_titles=titles,
+            tokens=await levels.prestige_tokens(self.user_id),
+            cosmetics=dict(self.pending),
+        )
+        await interaction.response.send_message(
+            content="👁️ **Temporary preview** — your equipped cosmetics have not changed.",
+            file=discord.File(card, filename="onyx-profile-preview.png"),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Apply Changes", style=discord.ButtonStyle.success, emoji="✓", row=2)
+    async def apply_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog._equipped(self.user_id)
+        for column in ("frame_id", "theme_id", "emblem_id", "effect_id", "title_id"):
+            await self.cog.bot.db.execute(
+                f"UPDATE onyx_profile_equipped SET {column}=? WHERE user_id=?",
+                (self.pending[column], self.user_id),
+            )
+        self.original = dict(self.pending)
+        await interaction.response.edit_message(
+            content="✅ **Your profile loadout has been saved!** Run `,rank` to see your updated card.",
+            embed=self.make_embed(),
+            view=self,
+        )
+
+    @discord.ui.button(label="Reset Preview", style=discord.ButtonStyle.secondary, emoji="↩️", row=2)
+    async def reset_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.pending = dict(self.original)
+        await interaction.response.edit_message(
+            content="Preview reset to your currently saved loadout.",
+            embed=self.make_embed(),
+            view=self,
+        )
+
+
+class PreviewCategorySelect(discord.ui.Select):
+    def __init__(self, preview: ProfilePreviewView):
+        self.preview = preview
+        options = [
+            discord.SelectOption(label="Frames", value="frame", emoji="🖼️"),
+            discord.SelectOption(label="Themes", value="theme", emoji="🎨"),
+            discord.SelectOption(label="Emblems", value="emblem", emoji="🏅"),
+            discord.SelectOption(label="Effects", value="effect", emoji="✨"),
+            discord.SelectOption(label="Titles", value="title", emoji="🏆"),
+        ]
+        super().__init__(placeholder="Choose a slot to customize...", min_values=1, max_values=1, options=options, row=0)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.preview.category = self.values[0]
+        await self.preview.redraw(interaction)
+
+
+class PreviewItemSelect(discord.ui.Select):
+    def __init__(self, preview: ProfilePreviewView, options=None):
+        self.preview = preview
+        options = options or preview.item_options()
+        super().__init__(
+            placeholder="Choose an owned cosmetic or default...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        category = self.preview.category
+        selected = self.values[0]
+        if category == "title":
+            if selected == "__default__":
+                value = None
+            else:
+                title_lookup = {slugify(title): title for title in self.preview.titles}
+                value = title_lookup.get(selected)
+                if value is None:
+                    return await interaction.response.send_message("That title is not unlocked.", ephemeral=True)
+            self.preview.pending["title_id"] = value
+        else:
+            column = COLUMN_BY_CATEGORY[category]
+            if selected == "__default__":
+                value = DEFAULTS[category]
+            else:
+                if (category, selected) not in self.preview.owned:
+                    return await interaction.response.send_message("You do not own that cosmetic.", ephemeral=True)
+                value = selected
+            self.preview.pending[column] = value
+        await interaction.response.edit_message(embed=self.preview.make_embed(), view=self.preview)
 
 
 async def setup(bot):
