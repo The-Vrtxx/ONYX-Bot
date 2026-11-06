@@ -174,6 +174,13 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
 
     draw.text((60, 190), stage, font=font_stage, fill=accent)
 
+    # Show the highest permanently unlocked Prestige Master title.
+    current_title = unlocked_titles[-1] if unlocked_titles else None
+    if current_title:
+        title_text = f"TITLE  •  {current_title.upper()}"
+        draw.text((60, 232), _fit_text(draw, title_text, font_label, 720),
+                  font=font_label, fill=(235, 242, 248))
+
     # Display the matching supplied Prestige emblem without extra labels.
     emblem_path = ASSET_DIR / PRESTIGE_EMBLEMS[emblem_key]
     if emblem_path.is_file():
@@ -315,6 +322,14 @@ class Levels(commands.Cog):
             )
         """)
         await self.bot.db.execute("""
+            CREATE TABLE IF NOT EXISTS onyx_master_title_unlocks (
+                user_id BIGINT NOT NULL,
+                title TEXT NOT NULL,
+                unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, title)
+            )
+        """)
+        await self.bot.db.execute("""
             CREATE TABLE IF NOT EXISTS onyx_prestige_wallet (
                 user_id BIGINT PRIMARY KEY,
                 tokens INTEGER NOT NULL DEFAULT 0
@@ -407,17 +422,30 @@ class Levels(commands.Cog):
             return int(row["master_level"]) >= MAX_MASTER_LEVEL
         return int(row["level"]) >= MAX_LEVEL
 
-    def unlocked_titles(self, row) -> list[str]:
-        if not row["master_mode"]:
-            return []
-        level = int(row["master_level"])
-        return [
-            title for threshold, title in MASTER_TITLES.items()
-            if level >= threshold
-        ]
+    async def sync_unlocked_titles(self, user_id: int, row) -> list[str]:
+        """Persist every milestone reached so titles remain unlocked permanently."""
+        if row["master_mode"]:
+            level = int(row["master_level"])
+            for threshold, title in MASTER_TITLES.items():
+                if level >= threshold:
+                    await self.bot.db.execute(
+                        """
+                        INSERT INTO onyx_master_title_unlocks (user_id, title)
+                        VALUES (?, ?)
+                        ON CONFLICT(user_id, title) DO NOTHING
+                        """,
+                        (user_id, title),
+                    )
+        rows = await self.bot.db.fetchall(
+            "SELECT title FROM onyx_master_title_unlocks WHERE user_id=?",
+            (user_id,),
+        )
+        owned = {item["title"] for item in rows}
+        # Return in milestone order, including all historical unlocks.
+        return [title for title in MASTER_TITLES.values() if title in owned]
 
-    def current_master_title(self, row):
-        titles = self.unlocked_titles(row)
+    async def current_master_title(self, user_id: int, row):
+        titles = await self.sync_unlocked_titles(user_id, row)
         return titles[-1] if titles else None
 
     async def prestige_tokens(self, user_id: int) -> int:
@@ -536,6 +564,7 @@ class Levels(commands.Cog):
                 (xp, level, master_level, amount, user_id),
             )
             new = await self.profile(user_id)
+            await self.sync_unlocked_titles(user_id, new)
             return old, new, gained_levels
 
     async def announce_level_up(self, message, settings, new_row, rewards):
@@ -631,7 +660,7 @@ class Levels(commands.Cog):
     async def rank(self, ctx, member: discord.Member = None):
         member = member or ctx.author
         row = await self.profile(member.id)
-        unlocked = self.unlocked_titles(row)
+        unlocked = await self.sync_unlocked_titles(member.id, row)
         tokens = await self.prestige_tokens(member.id)
         cosmetics = await self.equipped_cosmetics(member.id)
         card = render_onyx_profile_card(
@@ -1072,6 +1101,29 @@ class Levels(commands.Cog):
     @commands.is_owner()
     async def xp_remove(self, ctx, member: discord.User, amount: int):
         await self.change_xp(ctx, member, amount, "remove")
+
+    @levels.command(name="unlockall", aliases=["masterunlockall"])
+    @commands.is_owner()
+    async def unlockall(self, ctx, member: discord.User = None):
+        """Owner-only test command: unlock every Prestige Master title."""
+        member = member or ctx.author
+        await self.profile(member.id)
+        await self.bot.db.execute(
+            """
+            UPDATE onyx_global_levels
+            SET master_mode=1, master_level=?, prestige=?, level=?, xp=0,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE user_id=?
+            """,
+            (MAX_MASTER_LEVEL, MAX_PRESTIGE, MAX_LEVEL, member.id),
+        )
+        updated = await self.profile(member.id)
+        titles = await self.sync_unlocked_titles(member.id, updated)
+        await ctx.send(
+            f"🏆 **All Prestige Master titles unlocked** for {member.mention}!\\n"
+            f"Rank: **{stage_label(updated)}**\\n"
+            f"Titles: {', '.join(titles)}"
+        )
 
     @levels.command(name="reset")
     @commands.is_owner()
