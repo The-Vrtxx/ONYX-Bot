@@ -779,14 +779,13 @@ class InventoryView(discord.ui.View):
             row = await levels.profile(self.user_id)
             titles = await levels.sync_unlocked_titles(self.user_id, row)
             cosmetics = await levels.equipped_cosmetics(self.user_id)
-            if self.category in ("frame", "theme", "effect"):
+            if self.category in ("frame", "theme", "emblem", "effect"):
                 cosmetics[COLUMN_BY_CATEGORY[self.category]] = self.selected
             elif self.category == "title":
                 earned = {slugify(title): title for title in titles}
                 if self.selected not in earned:
                     return await interaction.followup.send("That title is not unlocked.", ephemeral=True)
                 cosmetics["title_id"] = earned[self.selected]
-            # Emblems are rank-based in the current card design; show the selected emblem in the preview note.
             card = render_onyx_profile_card(
                 display_name=interaction.user.display_name,
                 row=row,
@@ -795,8 +794,6 @@ class InventoryView(discord.ui.View):
                 cosmetics=cosmetics,
             )
             note = "Preview only — nothing has been equipped."
-            if self.category == "emblem":
-                note += " Shop emblem selection is saved to inventory, but the current profile renderer uses rank emblems."
             await interaction.followup.send(
                 content=note,
                 file=discord.File(card, filename="onyx-inventory-preview.png"),

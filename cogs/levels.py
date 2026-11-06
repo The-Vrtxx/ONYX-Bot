@@ -76,6 +76,11 @@ CARD_EFFECTS = {
     "electric_pulse": (100, 150, 255),
     "cosmic_aura": (175, 115, 255),
 }
+CARD_SHOP_EMBLEMS = {
+    "default": None, "veteran": (160, 190, 215), "elite": (255, 195, 70),
+    "champion": (255, 200, 70), "warlord": (255, 90, 85),
+    "mythic": (210, 100, 255),
+}
 
 
 def _card_font(size: int, bold: bool = False):
@@ -103,7 +108,7 @@ def _fit_text(draw, text, font, max_width):
 
 def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
                              tokens: int, cosmetics=None) -> BytesIO:
-    """Render a clean ONYX profile card with rank emblem and XP progress."""
+    """Render the user's ONYX profile as a PNG attachment."""
     cosmetics = cosmetics or {}
     theme_key = str(cosmetics.get("theme_id") or "onyx").lower()
     frame_key = str(cosmetics.get("frame_id") or "default").lower()
@@ -111,115 +116,157 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
     theme = CARD_THEMES.get(theme_key, CARD_THEMES["onyx"])
     frame_color = CARD_FRAMES.get(frame_key, CARD_FRAMES["default"])
     accent = theme[2]
-    width, height = 1100, 360
+    width, height = 1100, 430
 
     image = Image.new("RGB", (width, height), theme[0])
     pixels = image.load()
     for x in range(width):
         ratio = x / max(1, width - 1)
-        color = tuple(
-            int(theme[0][i] * (1 - ratio) + theme[1][i] * ratio)
-            for i in range(3)
-        )
+        color = tuple(int(theme[0][i] * (1-ratio) + theme[1][i] * ratio) for i in range(3))
         for y in range(height):
             pixels[x, y] = color
 
     draw = ImageDraw.Draw(image)
-    draw.ellipse((790, -210, 1240, 240),
-                 fill=tuple(max(0, c - 5) for c in theme[1]))
-    draw.ellipse((900, 190, 1220, 510),
-                 fill=tuple(max(0, c - 8) for c in theme[1]))
-    draw.rounded_rectangle((18, 18, width - 18, height - 18), radius=28,
+    # Subtle geometric background accents.
+    draw.ellipse((790, -210, 1240, 240), fill=tuple(max(0, c - 5) for c in theme[1]))
+    draw.ellipse((900, 190, 1220, 510), fill=tuple(max(0, c - 8) for c in theme[1]))
+    draw.rounded_rectangle((18, 18, width-18, height-18), radius=28,
                            outline=frame_color, width=5)
-    draw.rounded_rectangle((31, 31, width - 31, height - 31), radius=22,
-                           outline=tuple(min(255, int(c * 0.55 + 40))
-                                         for c in frame_color), width=1)
+    draw.rounded_rectangle((31, 31, width-31, height-31), radius=22,
+                           outline=tuple(min(255, int(c * 0.55 + 40)) for c in frame_color), width=1)
 
     effect_color = CARD_EFFECTS.get(effect_key)
     if effect_color:
-        glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
-        gd = ImageDraw.Draw(glow)
-        gd.rounded_rectangle((25, 25, width - 25, height - 25), radius=28,
-                             outline=(*effect_color, 100), width=15)
-        glow = glow.filter(ImageFilter.GaussianBlur(12))
-        image = Image.alpha_composite(image.convert("RGBA"), glow).convert("RGB")
+        # Strong, visible cosmetic treatments that remain inside the card bounds.
+        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
+        od.rounded_rectangle((24, 24, width-24, height-24), radius=30,
+                             outline=(*effect_color, 235), width=9)
+        if effect_key == "teal_glow":
+            od.rounded_rectangle((38, 38, width-38, height-38), radius=24,
+                                 outline=(*effect_color, 175), width=4)
+            od.ellipse((width-185, 35, width-85, 135), outline=(*effect_color, 180), width=5)
+        elif effect_key == "silver_shine":
+            od.polygon([(width-250, 30), (width-205, 30), (width-480, height-30),
+                        (width-525, height-30)], fill=(235, 245, 255, 48))
+            od.line((width-235, 35, width-510, height-35), fill=(245, 250, 255, 210), width=5)
+        elif effect_key == "electric_pulse":
+            points = [(width-180, 35), (width-225, 105), (width-175, 145),
+                      (width-255, 220), (width-205, 270), (width-280, height-35)]
+            od.line(points, fill=(*effect_color, 245), width=8, joint="curve")
+            od.line([(x-8, y) for x,y in points], fill=(220, 240, 255, 190), width=2)
+        elif effect_key == "cosmic_aura":
+            od.ellipse((width-290, -75, width+35, 250), outline=(*effect_color, 230), width=7)
+            od.ellipse((width-250, -35, width-5, 210), outline=(220, 170, 255, 175), width=3)
+            for sx, sy in ((830,75),(930,115),(1010,210),(760,285)):
+                od.ellipse((sx-5,sy-5,sx+5,sy+5), fill=(245,225,255,255))
+        # Soft halo behind the crisp effect lines.
+        halo = overlay.filter(ImageFilter.GaussianBlur(10))
+        image_rgba = Image.alpha_composite(image.convert("RGBA"), halo)
+        image_rgba = Image.alpha_composite(image_rgba, overlay)
+        image = image_rgba.convert("RGB")
         draw = ImageDraw.Draw(image)
 
     font_brand = _card_font(25, True)
     font_name = _card_font(43, True)
-    font_stage = _card_font(25, True)
+    font_stage = _card_font(27, True)
+    font_title = _card_font(31, True)
     font_label = _card_font(16, True)
+    font_value = _card_font(22, True)
+    font_small = _card_font(17)
 
     draw.text((58, 48), "ONYX", font=font_brand, fill=accent)
-    draw.text((155, 55), "GLOBAL PROFILE", font=font_label,
-              fill=(165, 185, 202))
-    draw.line((58, 98, width - 58, 98),
-              fill=tuple(int(c * 0.7) for c in accent), width=2)
+    draw.text((155, 55), "GLOBAL PROFILE", font=font_label, fill=(165, 185, 202))
+    draw.line((58, 98, width-58, 98), fill=tuple(int(c * .7) for c in accent), width=2)
 
-    draw.text((58, 125), _fit_text(draw, display_name, font_name, 650),
+    draw.text((58, 125), _fit_text(draw, display_name, font_name, 620),
               font=font_name, fill=(245, 249, 252))
 
     if row["master_mode"]:
         stage = f"PRESTIGE MASTER  •  LEVEL {int(row['master_level']):,} / 1,000"
         active_level = int(row["master_level"])
-        emblem_key = "master"
     else:
         prestige = int(row["prestige"])
-        stage = (
-            f"PRESTIGE {prestige}  •  LEVEL {int(row['level']):,} / 60"
-            if prestige else f"LEVEL {int(row['level']):,} / 60"
-        )
+        stage = f"PRESTIGE {prestige}  •  LEVEL {int(row['level']):,} / 60" if prestige else f"LEVEL {int(row['level']):,} / 60"
         active_level = int(row["level"])
-        emblem_key = prestige
+    draw.text((60, 185), stage, font=font_stage, fill=accent)
 
-    draw.text((60, 190), stage, font=font_stage, fill=accent)
+    earned_title = unlocked_titles[-1] if unlocked_titles else "No Master Title Yet"
+    selected_title = str(cosmetics.get("title_id") or earned_title)
+    if selected_title not in unlocked_titles:
+        selected_title = earned_title
+    # The rank insignia is tied to the user's actual progression, so the
+    # matching supplied ONYX artwork always appears on the card.
+    emblem_key = "master" if row["master_mode"] else int(row["prestige"])
+    emblem_label = (
+        "PRESTIGE MASTER EMBLEM" if emblem_key == "master"
+        else f"PRESTIGE {emblem_key} EMBLEM"
+    )
 
-    # Show the highest permanently unlocked Prestige Master title.
-    current_title = cosmetics.get("title_id") or (unlocked_titles[-1] if unlocked_titles else None)
-    if current_title:
-        title_text = f"TITLE  •  {str(current_title).upper()}"
-        draw.text((60, 232), _fit_text(draw, title_text, font_label, 720),
-                  font=font_label, fill=(235, 242, 248))
+    # Equipped title panel.
+    draw.rounded_rectangle((58, 238, 650, 315), radius=15,
+                           fill=(8, 14, 25), outline=accent, width=2)
+    draw.text((78, 250), "EQUIPPED TITLE", font=font_label, fill=(145, 165, 180))
+    draw.text((78, 274), _fit_text(draw, selected_title, font_title, 545),
+              font=font_title, fill=(245, 249, 252))
 
-    # Display the matching supplied Prestige emblem without extra labels.
-    emblem_path = ASSET_DIR / PRESTIGE_EMBLEMS[emblem_key]
+    # Shop emblem is a separate cosmetic badge; progression emblem remains intact.
+    shop_emblem_key = str(cosmetics.get("emblem_id") or "default").lower()
+    shop_emblem_color = CARD_SHOP_EMBLEMS.get(shop_emblem_key)
+    if shop_emblem_color:
+        badge_box = (675, 48, 1038, 100)
+        draw.rounded_rectangle(badge_box, radius=20, fill=(8, 14, 25),
+                               outline=shop_emblem_color, width=3)
+        draw.ellipse((690, 58, 722, 90), fill=shop_emblem_color)
+        badge_label = f"{shop_emblem_key.replace('_',' ').upper()} BADGE"
+        draw.text((735, 61), _fit_text(draw, badge_label, font_label, 285),
+                  font=font_label, fill=(245, 249, 252))
+
+    # Right-side emblem / token display.
+    draw.rounded_rectangle((710, 125, 1038, 315), radius=18,
+                           fill=(8, 14, 25), outline=accent, width=2)
+    draw.text((740, 145), emblem_label, font=font_label, fill=(155, 175, 190))
+    emblem_file = PRESTIGE_EMBLEMS[emblem_key]
+    emblem_path = ASSET_DIR / emblem_file
     if emblem_path.is_file():
         with Image.open(emblem_path) as source_emblem:
             insignia = source_emblem.convert("RGBA")
-            insignia.thumbnail((170, 170), Image.Resampling.LANCZOS)
+            insignia.thumbnail((126, 126), Image.Resampling.LANCZOS)
         image_rgba = image.convert("RGBA")
-        emblem_x = 890 - insignia.width // 2
-        emblem_y = 185 - insignia.height // 2
+        emblem_x = 874 - insignia.width // 2
+        emblem_y = 229 - insignia.height // 2
         image_rgba.alpha_composite(insignia, (emblem_x, emblem_y))
         image = image_rgba.convert("RGB")
         draw = ImageDraw.Draw(image)
+    else:
+        # Clear fallback if an asset is accidentally omitted from deployment.
+        draw.text((740, 190), "ONYX", font=font_title, fill=accent)
+    draw.text((740, 270), f"{int(row['prestige'])}/10 PRESTIGE", font=font_value, fill=(245, 249, 252))
+    draw.text((740, 298), f"{tokens} TOKENS", font=font_value, fill=accent)
 
-    # Optional shop emblem label beneath the progression emblem.
-    shop_emblem = str(cosmetics.get("emblem_id") or "default").lower()
-    if shop_emblem != "default":
-        emblem_label = shop_emblem.replace("_", " ").upper()
-        draw.text((805, 245), _fit_text(draw, emblem_label, font_label, 190),
-                  font=font_label, fill=accent)
-
-    # Current-level XP progress only: no token, title, lifetime-XP, or theme text.
+    # XP progress.
     needed = xp_needed(active_level)
     current_xp = int(row["xp"])
     ratio = min(1.0, max(0.0, current_xp / needed)) if needed else 1.0
-    draw.text((60, 275), f"XP  {current_xp:,} / {needed:,}",
-              font=font_label, fill=(205, 220, 230))
-    draw.rounded_rectangle((260, 278, 900, 298), radius=10, fill=(5, 10, 18))
+    draw.text((60, 333), f"XP  {current_xp:,} / {needed:,}", font=font_label, fill=(205, 220, 230))
+    draw.rounded_rectangle((260, 337, 700, 356), radius=9, fill=(5, 10, 18))
     if ratio > 0:
-        draw.rounded_rectangle(
-            (260, 278, 260 + int(640 * ratio), 298),
-            radius=10, fill=accent
-        )
-    draw.text((920, 275), f"{ratio * 100:.1f}%",
-              font=font_label, fill=(235, 242, 248))
+        draw.rounded_rectangle((260, 337, 260 + int(440 * ratio), 356),
+                               radius=9, fill=accent)
+    draw.text((725, 333), f"{ratio*100:.1f}%", font=font_label, fill=(235, 242, 248))
+
+    draw.text((60, 390), f"LIFETIME XP  {int(row['lifetime_xp']):,}",
+              font=font_small, fill=(165, 185, 202))
+    draw.text((390, 390), f"UNLOCKED TITLES  {len(unlocked_titles)}",
+              font=font_small, fill=(165, 185, 202))
+    draw.text((785, 390), f"THEME  {theme_key.upper()}",
+              font=font_small, fill=(165, 185, 202))
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     output.seek(0)
     return output
+
 
 def xp_needed(level: int) -> int:
     return max(1, int(BASE_XP + LINEAR_XP * level + QUADRATIC_XP * level * level))
@@ -329,14 +376,6 @@ class Levels(commands.Cog):
             )
         """)
         await self.bot.db.execute("""
-            CREATE TABLE IF NOT EXISTS onyx_master_title_unlocks (
-                user_id BIGINT NOT NULL,
-                title TEXT NOT NULL,
-                unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, title)
-            )
-        """)
-        await self.bot.db.execute("""
             CREATE TABLE IF NOT EXISTS onyx_prestige_wallet (
                 user_id BIGINT PRIMARY KEY,
                 tokens INTEGER NOT NULL DEFAULT 0
@@ -429,30 +468,17 @@ class Levels(commands.Cog):
             return int(row["master_level"]) >= MAX_MASTER_LEVEL
         return int(row["level"]) >= MAX_LEVEL
 
-    async def sync_unlocked_titles(self, user_id: int, row) -> list[str]:
-        """Persist every milestone reached so titles remain unlocked permanently."""
-        if row["master_mode"]:
-            level = int(row["master_level"])
-            for threshold, title in MASTER_TITLES.items():
-                if level >= threshold:
-                    await self.bot.db.execute(
-                        """
-                        INSERT INTO onyx_master_title_unlocks (user_id, title)
-                        VALUES (?, ?)
-                        ON CONFLICT(user_id, title) DO NOTHING
-                        """,
-                        (user_id, title),
-                    )
-        rows = await self.bot.db.fetchall(
-            "SELECT title FROM onyx_master_title_unlocks WHERE user_id=?",
-            (user_id,),
-        )
-        owned = {item["title"] for item in rows}
-        # Return in milestone order, including all historical unlocks.
-        return [title for title in MASTER_TITLES.values() if title in owned]
+    def unlocked_titles(self, row) -> list[str]:
+        if not row["master_mode"]:
+            return []
+        level = int(row["master_level"])
+        return [
+            title for threshold, title in MASTER_TITLES.items()
+            if level >= threshold
+        ]
 
-    async def current_master_title(self, user_id: int, row):
-        titles = await self.sync_unlocked_titles(user_id, row)
+    def current_master_title(self, row):
+        titles = self.unlocked_titles(row)
         return titles[-1] if titles else None
 
     async def prestige_tokens(self, user_id: int) -> int:
@@ -571,7 +597,6 @@ class Levels(commands.Cog):
                 (xp, level, master_level, amount, user_id),
             )
             new = await self.profile(user_id)
-            await self.sync_unlocked_titles(user_id, new)
             return old, new, gained_levels
 
     async def announce_level_up(self, message, settings, new_row, rewards):
@@ -667,7 +692,7 @@ class Levels(commands.Cog):
     async def rank(self, ctx, member: discord.Member = None):
         member = member or ctx.author
         row = await self.profile(member.id)
-        unlocked = await self.sync_unlocked_titles(member.id, row)
+        unlocked = self.unlocked_titles(row)
         tokens = await self.prestige_tokens(member.id)
         cosmetics = await self.equipped_cosmetics(member.id)
         card = render_onyx_profile_card(
@@ -1108,29 +1133,6 @@ class Levels(commands.Cog):
     @commands.is_owner()
     async def xp_remove(self, ctx, member: discord.User, amount: int):
         await self.change_xp(ctx, member, amount, "remove")
-
-    @levels.command(name="unlockall", aliases=["masterunlockall"])
-    @commands.is_owner()
-    async def unlockall(self, ctx, member: discord.User = None):
-        """Owner-only test command: unlock every Prestige Master title."""
-        member = member or ctx.author
-        await self.profile(member.id)
-        await self.bot.db.execute(
-            """
-            UPDATE onyx_global_levels
-            SET master_mode=1, master_level=?, prestige=?, level=?, xp=0,
-                updated_at=CURRENT_TIMESTAMP
-            WHERE user_id=?
-            """,
-            (MAX_MASTER_LEVEL, MAX_PRESTIGE, MAX_LEVEL, member.id),
-        )
-        updated = await self.profile(member.id)
-        titles = await self.sync_unlocked_titles(member.id, updated)
-        await ctx.send(
-            f"🏆 **All Prestige Master titles unlocked** for {member.mention}!\\n"
-            f"Rank: **{stage_label(updated)}**\\n"
-            f"Titles: {', '.join(titles)}"
-        )
 
     @levels.command(name="reset")
     @commands.is_owner()
