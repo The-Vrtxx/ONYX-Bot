@@ -171,11 +171,11 @@ class EmbedSectionSelect(discord.ui.Select):
 
 
 class EmbedCreatorView(discord.ui.View):
-    def __init__(self, author_id, channel):
+    def __init__(self, author_id, channel, initial_data=None):
         super().__init__(timeout=600)
         self.author_id = author_id
         self.channel = channel
-        self.data = {
+        self.data = initial_data or {
             "title": "",
             "description": "",
             "color": "2C2643",
@@ -304,6 +304,68 @@ class Custom(commands.Cog):
     async def embed_create(self, ctx):
         view = EmbedCreatorView(ctx.author.id, ctx.channel)
         await ctx.send(embed=view.make_panel_embed(), view=view)
+
+    @commands.command(
+        name="copyembed",
+        aliases=["embedcopy"],
+        help="Copy an embed from a message link or a replied-to message."
+    )
+    @commands.guild_only()
+    @commands.has_permissions(manage_messages=True)
+    async def copy_embed(self, ctx, message: discord.Message = None):
+        """Load the first embed from a message into the visual embed creator."""
+        source = message
+
+        if source is None and ctx.message.reference:
+            source = ctx.message.reference.resolved
+            if source is None:
+                reference = ctx.message.reference
+                if reference.message_id:
+                    try:
+                        channel = (
+                            self.bot.get_channel(reference.channel_id)
+                            or await self.bot.fetch_channel(reference.channel_id)
+                        )
+                        source = await channel.fetch_message(reference.message_id)
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        source = None
+
+        if source is None:
+            return await ctx.send(
+                f"Reply to a message containing an embed, or use "
+                f"`{ctx.prefix}copyembed <message link>`."
+            )
+
+        if not source.embeds:
+            return await ctx.send("That message doesn't contain an embed to copy.")
+
+        original = source.embeds[0]
+        color = f"{original.color.value:06X}" if original.color else "2C2643"
+        copied_data = {
+            "title": original.title or "",
+            "description": original.description or "",
+            "color": color,
+            "author": original.author.name or "" if original.author else "",
+            "footer": original.footer.text or "" if original.footer else "",
+            "thumbnail": original.thumbnail.url or "" if original.thumbnail else "",
+            "image": original.image.url or "" if original.image else "",
+            "fields": [
+                {
+                    "name": field.name,
+                    "value": field.value,
+                    "inline": field.inline,
+                }
+                for field in original.fields[:MAX_FIELDS]
+            ],
+            "timestamp": original.timestamp is not None,
+        }
+
+        view = EmbedCreatorView(ctx.author.id, ctx.channel, initial_data=copied_data)
+        await ctx.send(
+            "Embed copied into the visual creator. You can edit it, preview it, or send it.",
+            embed=view.make_panel_embed(),
+            view=view,
+        )
 
     @commands.command(name="custom_add", help="Create a custom text command.")
     @commands.has_permissions(manage_guild=True)
