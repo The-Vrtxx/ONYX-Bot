@@ -76,11 +76,6 @@ CARD_EFFECTS = {
     "electric_pulse": (100, 150, 255),
     "cosmic_aura": (175, 115, 255),
 }
-CARD_SHOP_EMBLEMS = {
-    "default": None, "veteran": (160, 190, 215), "elite": (255, 195, 70),
-    "champion": (255, 200, 70), "warlord": (255, 90, 85),
-    "mythic": (210, 100, 255),
-}
 
 
 def _card_font(size: int, bold: bool = False):
@@ -107,8 +102,8 @@ def _fit_text(draw, text, font, max_width):
 
 
 def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
-                             tokens: int = 0, cosmetics=None) -> BytesIO:
-    """Render the clean ONYX profile card with equipped cosmetics applied visually."""
+                             tokens: int, cosmetics=None) -> BytesIO:
+    """Render a clean ONYX profile card with rank emblem and XP progress."""
     cosmetics = cosmetics or {}
     theme_key = str(cosmetics.get("theme_id") or "onyx").lower()
     frame_key = str(cosmetics.get("frame_id") or "default").lower()
@@ -122,121 +117,181 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
     pixels = image.load()
     for x in range(width):
         ratio = x / max(1, width - 1)
-        color = tuple(int(theme[0][i] * (1-ratio) + theme[1][i] * ratio) for i in range(3))
+        color = tuple(
+            int(theme[0][i] * (1 - ratio) + theme[1][i] * ratio)
+            for i in range(3)
+        )
         for y in range(height):
             pixels[x, y] = color
 
     draw = ImageDraw.Draw(image)
-    draw.ellipse((820, -190, 1190, 180), fill=tuple(max(0, c - 5) for c in theme[1]))
-    draw.ellipse((900, 205, 1190, 495), fill=tuple(max(0, c - 8) for c in theme[1]))
-    draw.rounded_rectangle((18, 18, width-18, height-18), radius=28,
+    draw.ellipse((790, -210, 1240, 240),
+                 fill=tuple(max(0, c - 5) for c in theme[1]))
+    draw.ellipse((900, 190, 1220, 510),
+                 fill=tuple(max(0, c - 8) for c in theme[1]))
+    draw.rounded_rectangle((18, 18, width - 18, height - 18), radius=28,
                            outline=frame_color, width=5)
-    draw.rounded_rectangle((31, 31, width-31, height-31), radius=22,
-                           outline=tuple(min(255, int(c * .55 + 40)) for c in frame_color), width=1)
+    draw.rounded_rectangle((31, 31, width - 31, height - 31), radius=22,
+                           outline=tuple(min(255, int(c * 0.55 + 40))
+                                         for c in frame_color), width=1)
 
     effect_color = CARD_EFFECTS.get(effect_key)
     if effect_color:
-        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-        od = ImageDraw.Draw(overlay)
-        od.rounded_rectangle((24, 24, width-24, height-24), radius=30,
-                             outline=(*effect_color, 235), width=8)
-        if effect_key == "teal_glow":
-            od.rounded_rectangle((39, 39, width-39, height-39), radius=22,
-                                 outline=(*effect_color, 190), width=3)
-        elif effect_key == "silver_shine":
-            od.polygon([(width-250, 25), (width-205, 25),
-                        (width-440, height-25), (width-485, height-25)],
-                       fill=(235, 245, 255, 48))
-            od.line((width-230, 30, width-465, height-30),
-                    fill=(245, 250, 255, 210), width=4)
-        elif effect_key == "electric_pulse":
-            pts = [(width-165, 28), (width-205, 92), (width-160, 130),
-                   (width-235, 195), (width-190, 240), (width-255, height-28)]
-            od.line(pts, fill=(*effect_color, 245), width=7, joint="curve")
-        elif effect_key == "cosmic_aura":
-            od.ellipse((width-280, -75, width+25, 230),
-                       outline=(*effect_color, 230), width=7)
-            od.ellipse((width-245, -40, width-5, 205),
-                       outline=(220, 170, 255, 175), width=3)
-            for sx, sy in ((830, 75), (930, 115), (1010, 210), (760, 285)):
-                od.ellipse((sx-4, sy-4, sx+4, sy+4), fill=(245, 225, 255, 255))
-        halo = overlay.filter(ImageFilter.GaussianBlur(9))
-        rgba = Image.alpha_composite(image.convert("RGBA"), halo)
-        image = Image.alpha_composite(rgba, overlay).convert("RGB")
+        glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        gd.rounded_rectangle((25, 25, width - 25, height - 25), radius=28,
+                             outline=(*effect_color, 100), width=15)
+        glow = glow.filter(ImageFilter.GaussianBlur(12))
+        image = Image.alpha_composite(image.convert("RGBA"), glow).convert("RGB")
         draw = ImageDraw.Draw(image)
 
     font_brand = _card_font(25, True)
     font_name = _card_font(43, True)
-    font_stage = _card_font(27, True)
+    font_stage = _card_font(25, True)
     font_label = _card_font(16, True)
-    font_value = _card_font(22, True)
 
-    draw.text((58, 43), "ONYX", font=font_brand, fill=accent)
-    draw.text((155, 50), "GLOBAL PROFILE", font=font_label, fill=(165, 185, 202))
-    draw.line((58, 91, width-58, 91), fill=tuple(int(c * .7) for c in accent), width=2)
-    draw.text((58, 112), _fit_text(draw, display_name, font_name, 650),
+    draw.text((58, 48), "ONYX", font=font_brand, fill=accent)
+    draw.text((155, 55), "GLOBAL PROFILE", font=font_label,
+              fill=(165, 185, 202))
+    draw.line((58, 98, width - 58, 98),
+              fill=tuple(int(c * 0.7) for c in accent), width=2)
+
+    draw.text((58, 125), _fit_text(draw, display_name, font_name, 650),
               font=font_name, fill=(245, 249, 252))
 
     if row["master_mode"]:
         stage = f"PRESTIGE MASTER  •  LEVEL {int(row['master_level']):,} / 1,000"
         active_level = int(row["master_level"])
+        emblem_key = "master"
     else:
         prestige = int(row["prestige"])
-        stage = (f"PRESTIGE {prestige}  •  LEVEL {int(row['level']):,} / 60"
-                 if prestige else f"LEVEL {int(row['level']):,} / 60")
+        stage = (
+            f"PRESTIGE {prestige}  •  LEVEL {int(row['level']):,} / 60"
+            if prestige else f"LEVEL {int(row['level']):,} / 60"
+        )
         active_level = int(row["level"])
-    draw.text((60, 170), stage, font=font_stage, fill=accent)
+        emblem_key = prestige
 
-    # Show the highest earned Master title as a simple line, not a large panel.
-    earned_title = unlocked_titles[-1] if unlocked_titles else None
-    if earned_title:
-        draw.text((60, 211), f"TITLE  •  {earned_title.upper()}",
-                  font=font_label, fill=(235, 242, 248))
+    draw.text((60, 190), stage, font=font_stage, fill=accent)
 
-    # Keep the progression emblem on the right; shop emblems add a compact badge.
-    emblem_key = "master" if row["master_mode"] else int(row["prestige"])
-    emblem_label = ("PRESTIGE MASTER" if emblem_key == "master"
-                    else f"PRESTIGE {emblem_key}")
-    draw.rounded_rectangle((790, 112, 1038, 285), radius=18,
-                           fill=(8, 14, 25), outline=accent, width=2)
-    draw.text((812, 126), emblem_label, font=font_label, fill=(155, 175, 190))
+    # Display the matching supplied Prestige emblem without extra labels.
     emblem_path = ASSET_DIR / PRESTIGE_EMBLEMS[emblem_key]
     if emblem_path.is_file():
-        with Image.open(emblem_path) as source:
-            insignia = source.convert("RGBA")
-            insignia.thumbnail((112, 112), Image.Resampling.LANCZOS)
-        rgba = image.convert("RGBA")
-        rgba.alpha_composite(insignia, (914 - insignia.width // 2, 164))
-        image = rgba.convert("RGB")
+        with Image.open(emblem_path) as source_emblem:
+            insignia = source_emblem.convert("RGBA")
+            insignia.thumbnail((170, 170), Image.Resampling.LANCZOS)
+        image_rgba = image.convert("RGBA")
+        emblem_x = 890 - insignia.width // 2
+        emblem_y = 185 - insignia.height // 2
+        image_rgba.alpha_composite(insignia, (emblem_x, emblem_y))
+        image = image_rgba.convert("RGB")
         draw = ImageDraw.Draw(image)
-    else:
-        draw.text((850, 185), "ONYX", font=font_value, fill=accent)
 
-    shop_emblem = str(cosmetics.get("emblem_id") or "default").lower()
-    shop_color = CARD_SHOP_EMBLEMS.get(shop_emblem)
-    if shop_color:
-        badge = f"{shop_emblem.replace('_', ' ').upper()} BADGE"
-        draw.rounded_rectangle((790, 292, 1038, 326), radius=12,
-                               fill=(8, 14, 25), outline=shop_color, width=2)
-        draw.text((808, 300), _fit_text(draw, badge, font_label, 210),
-                  font=font_label, fill=(245, 249, 252))
-
+    # Current-level XP progress only: no token, title, lifetime-XP, or theme text.
     needed = xp_needed(active_level)
     current_xp = int(row["xp"])
     ratio = min(1.0, max(0.0, current_xp / needed)) if needed else 1.0
-    draw.text((60, 267), f"XP  {current_xp:,} / {needed:,}",
+    draw.text((60, 275), f"XP  {current_xp:,} / {needed:,}",
               font=font_label, fill=(205, 220, 230))
-    draw.rounded_rectangle((260, 271, 700, 290), radius=9, fill=(5, 10, 18))
+    draw.rounded_rectangle((260, 278, 900, 298), radius=10, fill=(5, 10, 18))
     if ratio > 0:
-        draw.rounded_rectangle((260, 271, 260 + int(440 * ratio), 290),
-                               radius=9, fill=accent)
-    draw.text((725, 267), f"{ratio*100:.1f}%", font=font_label,
-              fill=(235, 242, 248))
+        draw.rounded_rectangle(
+            (260, 278, 260 + int(640 * ratio), 298),
+            radius=10, fill=accent
+        )
+    draw.text((920, 275), f"{ratio * 100:.1f}%",
+              font=font_label, fill=(235, 242, 248))
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     output.seek(0)
     return output
+
+def xp_needed(level: int) -> int:
+    return max(1, int(BASE_XP + LINEAR_XP * level + QUADRATIC_XP * level * level))
+
+
+def progress_bar(current: int, required: int, size: int = 14) -> str:
+    ratio = min(1.0, max(0.0, current / required)) if required else 1.0
+    filled = int(ratio * size)
+    return "▰" * filled + "▱" * (size - filled)
+
+
+def stage_label(row) -> str:
+    if row["master_mode"]:
+        return f"Prestige Master • Level {row['master_level']:,}/{MAX_MASTER_LEVEL:,}"
+    if row["prestige"]:
+        return f"Prestige {row['prestige']} • Level {row['level']:,}/{MAX_LEVEL}"
+    return f"Level {row['level']:,}/{MAX_LEVEL}"
+
+
+class PrestigeChoiceView(discord.ui.View):
+    def __init__(self, cog, user_id: int):
+        super().__init__(timeout=90)
+        self.cog = cog
+        self.user_id = user_id
+        self.finished = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "This Prestige choice belongs to another user.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Prestige", style=discord.ButtonStyle.primary, emoji="⬆️")
+    async def prestige(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.finished:
+            return await interaction.response.send_message(
+                "This choice has already been handled.", ephemeral=True
+            )
+
+        applied = await self.cog.apply_prestige(self.user_id)
+        self.finished = True
+        for item in self.children:
+            item.disabled = True
+
+        if not applied:
+            return await interaction.response.edit_message(
+                content="Your Prestige eligibility has changed. Run `,prestige` again.",
+                view=None,
+            )
+
+        updated = await self.cog.profile(self.user_id)
+        if updated["master_mode"]:
+            message = (
+                f"🏆 **Prestige Master unlocked!** Your profile is now "
+                f"**{stage_label(updated)}**."
+            )
+        else:
+            message = (
+                f"🏆 **Prestige unlocked!** Your profile is now "
+                f"**{stage_label(updated)}**.\n"
+                f"🪙 You earned **{PRESTIGE_TOKEN_REWARD} Prestige Tokens**!"
+            )
+
+        await interaction.response.edit_message(
+            content=message + "\nYour lifetime XP has been preserved.",
+            view=self,
+        )
+
+    @discord.ui.button(label="Stay at Level 60", style=discord.ButtonStyle.secondary, emoji="🛡️")
+    async def stay(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.finished = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            content=(
+                "You chose to keep your current rank. Your XP and Level 60 progress "
+                "are safe. Run `,prestige` whenever you're ready."
+            ),
+            view=self,
+        )
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
 
 
 class Levels(commands.Cog):
@@ -245,10 +300,6 @@ class Levels(commands.Cog):
         self.cooldowns = {}
         self._xp_lock = asyncio.Lock()
         self._prestige_lock = asyncio.Lock()
-
-    async def sync_unlocked_titles(self, user_id: int, row) -> list[str]:
-        """Compatibility helper used by the Prestige Shop preview."""
-        return self.unlocked_titles(row)
 
     async def cog_load(self):
         await self.bot.db.execute("""

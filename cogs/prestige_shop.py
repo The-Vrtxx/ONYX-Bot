@@ -276,11 +276,37 @@ class PrestigeShop(commands.Cog):
         return discord.File(output, filename="onyx-shop-art.png")
 
     def _shop_welcome_art(self):
-        """Return the ONYX welcome banner shown before a member selects an item."""
-        asset = Path(__file__).resolve().parent.parent / "assets" / "onyx_shop_welcome.png"
-        if not asset.exists():
-            raise FileNotFoundError(f"Missing ONYX shop welcome artwork: {asset}")
-        return discord.File(str(asset), filename="onyx-shop-welcome.png")
+        """Generate the ONYX welcome banner so the shop has no external asset dependency."""
+        width, height = 1100, 420
+        image = Image.new("RGB", (width, height), (8, 15, 25))
+        pixels = image.load()
+        left = (5, 42, 55)
+        right = (62, 15, 82)
+        for x in range(width):
+            t = x / max(1, width - 1)
+            color = tuple(int(left[i] * (1 - t) + right[i] * t) for i in range(3))
+            for y in range(height):
+                pixels[x, y] = color
+
+        draw = ImageDraw.Draw(image)
+        draw.rounded_rectangle((18, 18, width - 18, height - 18),
+                               radius=34, outline=(45, 210, 205), width=5)
+        draw.ellipse((780, -170, 1190, 240), outline=(130, 65, 180), width=8)
+        draw.ellipse((835, -120, 1135, 180), outline=(50, 190, 190), width=4)
+        try:
+            title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 72)
+            sub_font = ImageFont.truetype("DejaVuSans.ttf", 30)
+            small_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 20)
+        except OSError:
+            title_font = sub_font = small_font = ImageFont.load_default()
+        draw.text((72, 105), "ONYX", font=title_font, fill=(245, 250, 255))
+        draw.text((78, 205), "PRESTIGE SHOP", font=sub_font, fill=(65, 225, 215))
+        draw.text((80, 280), "CUSTOMIZE YOUR GLOBAL PROFILE", font=small_font,
+                  fill=(205, 220, 235))
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        output.seek(0)
+        return discord.File(output, filename="onyx-shop-welcome.png")
 
     def _shop_embed(self, balance: int, category: str = "frame",
                     selected: str | None = None, owned=None):
