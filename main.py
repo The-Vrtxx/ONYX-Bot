@@ -1,4 +1,6 @@
 import os
+import io
+import json
 import logging
 from pathlib import Path
 
@@ -251,6 +253,74 @@ COG_LABELS = {
     "tickets": "Tickets", "utility": "Utility", "voicemaster": "Voice Master",
     "welcome": "Welcome & Goodbye", "reports": "Reports",
 }
+
+
+@bot.command(name="exportcommands", hidden=True)
+@commands.is_owner()
+async def export_commands(ctx):
+    """Export all publicly visible commands as a JSON file. Owner only."""
+    commands_list = []
+
+    for command in bot.walk_commands():
+        if command.hidden:
+            continue
+
+        module = (
+            command.cog.__class__.__module__.split(".")[-1]
+            if command.cog else "core"
+        )
+        category = COG_LABELS.get(
+            module,
+            command.cog.qualified_name if command.cog else "Core"
+        )
+
+        usage = f"{ctx.prefix}{command.qualified_name}"
+        if command.signature:
+            usage += f" {command.signature}"
+
+        commands_list.append({
+            "name": command.qualified_name,
+            "usage": usage,
+            "category": category,
+            "description": (
+                command.help or command.brief or "No description available."
+            )
+        })
+
+    commands_list.sort(
+        key=lambda item: (
+            item["category"].casefold(),
+            item["name"].casefold()
+        )
+    )
+
+    data = json.dumps(
+        commands_list,
+        indent=2,
+        ensure_ascii=False
+    ).encode("utf-8")
+    export_file = discord.File(
+        io.BytesIO(data),
+        filename="onyx-commands.json"
+    )
+
+    try:
+        await ctx.author.send(
+            f"Exported **{len(commands_list)} public commands**.",
+            file=export_file
+        )
+    except discord.Forbidden:
+        return await ctx.send(
+            "I couldn't DM you the export. Enable direct messages from "
+            "server members, then run `,exportcommands` again."
+        )
+
+    await ctx.send(
+        f"Your command export was sent to your DMs "
+        f"(**{len(commands_list)} public commands**)."
+    )
+
+
 COMMANDS_PER_PAGE = 4
 GROUP_OPTIONS_PER_PAGE = 25
 
