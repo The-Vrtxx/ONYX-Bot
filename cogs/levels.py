@@ -103,11 +103,12 @@ def _fit_text(draw, text, font, max_width):
 
 def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
                              tokens: int, cosmetics=None) -> BytesIO:
-    """Render a clean ONYX profile card with rank emblem and XP progress."""
+    """Render the ONYX profile card using the equipped or previewed cosmetics."""
     cosmetics = cosmetics or {}
     theme_key = str(cosmetics.get("theme_id") or "onyx").lower()
     frame_key = str(cosmetics.get("frame_id") or "default").lower()
     effect_key = str(cosmetics.get("effect_id") or "none").lower()
+    emblem_key = str(cosmetics.get("emblem_id") or "default").lower()
     theme = CARD_THEMES.get(theme_key, CARD_THEMES["onyx"])
     frame_color = CARD_FRAMES.get(frame_key, CARD_FRAMES["default"])
     accent = theme[2]
@@ -116,9 +117,9 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
     image = Image.new("RGB", (width, height), theme[0])
     pixels = image.load()
     for x in range(width):
-        ratio = x / max(1, width - 1)
+        ratio_x = x / max(1, width - 1)
         color = tuple(
-            int(theme[0][i] * (1 - ratio) + theme[1][i] * ratio)
+            int(theme[0][i] * (1 - ratio_x) + theme[1][i] * ratio_x)
             for i in range(3)
         )
         for y in range(height):
@@ -129,40 +130,79 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
                  fill=tuple(max(0, c - 5) for c in theme[1]))
     draw.ellipse((900, 190, 1220, 510),
                  fill=tuple(max(0, c - 8) for c in theme[1]))
-    draw.rounded_rectangle((18, 18, width - 18, height - 18), radius=28,
-                           outline=frame_color, width=5)
-    draw.rounded_rectangle((31, 31, width - 31, height - 31), radius=22,
-                           outline=tuple(min(255, int(c * 0.55 + 40))
-                                         for c in frame_color), width=1)
 
+    # Distinct, visible effect treatments around the card perimeter.
     effect_color = CARD_EFFECTS.get(effect_key)
     if effect_color:
-        glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
-        gd = ImageDraw.Draw(glow)
-        gd.rounded_rectangle((25, 25, width - 25, height - 25), radius=28,
-                             outline=(*effect_color, 100), width=15)
-        glow = glow.filter(ImageFilter.GaussianBlur(12))
-        image = Image.alpha_composite(image.convert("RGBA"), glow).convert("RGB")
+        fx = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        fd = ImageDraw.Draw(fx)
+        if effect_key == "teal_glow":
+            fd.rounded_rectangle((20, 20, width - 20, height - 20),
+                                 radius=30, outline=(*effect_color, 230), width=9)
+            fx = fx.filter(ImageFilter.GaussianBlur(9))
+        elif effect_key == "silver_shine":
+            # Diagonal metallic sheen across the upper-right corner.
+            fd.polygon([(690, 20), (850, 20), (1090, 260), (1090, 325)],
+                       fill=(*effect_color, 48))
+            fd.line((760, 25, 1080, 345), fill=(*effect_color, 210), width=5)
+            fd.line((805, 25, 1090, 310), fill=(255, 255, 255, 125), width=2)
+        elif effect_key == "electric_pulse":
+            fd.rounded_rectangle((23, 23, width - 23, height - 23),
+                                 radius=30, outline=(*effect_color, 230), width=5)
+            # Angular lightning accents at all four corners.
+            for points in (
+                [(35, 95), (65, 70), (54, 112), (86, 91)],
+                [(1010, 70), (1040, 48), (1028, 91), (1065, 72)],
+                [(35, 270), (66, 245), (54, 288), (88, 267)],
+                [(1010, 290), (1040, 265), (1028, 308), (1065, 285)],
+            ):
+                fd.line(points, fill=(*effect_color, 255), width=6, joint="curve")
+            fx = fx.filter(ImageFilter.GaussianBlur(2))
+        elif effect_key == "cosmic_aura":
+            for inset, alpha, line_width in ((8, 45, 18), (18, 100, 8), (27, 220, 3)):
+                fd.rounded_rectangle((inset, inset, width-inset, height-inset),
+                                     radius=34, outline=(*effect_color, alpha),
+                                     width=line_width)
+            # Small starbursts make the aura visibly different from a glow.
+            for sx, sy in ((80, 42), (1015, 55), (1040, 300), (75, 315), (550, 28)):
+                fd.line((sx-10, sy, sx+10, sy), fill=(235, 220, 255, 230), width=3)
+                fd.line((sx, sy-10, sx, sy+10), fill=(235, 220, 255, 230), width=3)
+        image = Image.alpha_composite(image.convert("RGBA"), fx).convert("RGB")
         draw = ImageDraw.Draw(image)
+
+    # Main card frame; frame cosmetics change both color and visual treatment.
+    draw.rounded_rectangle((18, 18, width - 18, height - 18), radius=28,
+                           outline=frame_color, width=5)
+    inner_frame = tuple(min(255, int(c * 0.55 + 40)) for c in frame_color)
+    draw.rounded_rectangle((31, 31, width - 31, height - 31), radius=22,
+                           outline=inner_frame, width=1)
+    if frame_key in ("neon", "legendary"):
+        draw.rounded_rectangle((24, 24, width - 24, height - 24), radius=30,
+                               outline=tuple(min(255, c) for c in frame_color), width=2)
+    elif frame_key == "steel":
+        draw.line((55, 23, width - 55, 23), fill=(220, 230, 240), width=2)
+    elif frame_key == "obsidian":
+        draw.rounded_rectangle((26, 26, width - 26, height - 26), radius=26,
+                               outline=(75, 65, 105), width=2)
 
     font_brand = _card_font(25, True)
     font_name = _card_font(43, True)
     font_stage = _card_font(25, True)
     font_label = _card_font(16, True)
+    font_emblem = _card_font(20, True)
 
     draw.text((58, 48), "ONYX", font=font_brand, fill=accent)
     draw.text((155, 55), "GLOBAL PROFILE", font=font_label,
               fill=(165, 185, 202))
     draw.line((58, 98, width - 58, 98),
               fill=tuple(int(c * 0.7) for c in accent), width=2)
-
     draw.text((58, 125), _fit_text(draw, display_name, font_name, 650),
               font=font_name, fill=(245, 249, 252))
 
     if row["master_mode"]:
         stage = f"PRESTIGE MASTER  •  LEVEL {int(row['master_level']):,} / 1,000"
         active_level = int(row["master_level"])
-        emblem_key = "master"
+        rank_emblem_key = "master"
     else:
         prestige = int(row["prestige"])
         stage = (
@@ -170,24 +210,49 @@ def render_onyx_profile_card(display_name: str, row, unlocked_titles: list[str],
             if prestige else f"LEVEL {int(row['level']):,} / 60"
         )
         active_level = int(row["level"])
-        emblem_key = prestige
-
+        rank_emblem_key = prestige
     draw.text((60, 190), stage, font=font_stage, fill=accent)
 
-    # Display the matching supplied Prestige emblem without extra labels.
-    emblem_path = ASSET_DIR / PRESTIGE_EMBLEMS[emblem_key]
-    if emblem_path.is_file():
-        with Image.open(emblem_path) as source_emblem:
-            insignia = source_emblem.convert("RGBA")
-            insignia.thumbnail((170, 170), Image.Resampling.LANCZOS)
+    # Shop emblem overrides the progression emblem. Draw a custom badge so each
+    # purchased emblem is visible even when no separate PNG asset is installed.
+    shop_emblems = {
+        "veteran": ("VETERAN", (145, 185, 220)),
+        "elite": ("ELITE", (90, 205, 255)),
+        "champion": ("CHAMPION", (255, 205, 75)),
+        "warlord": ("WARLORD", (235, 85, 90)),
+        "mythic": ("MYTHIC", (205, 110, 255)),
+    }
+    if emblem_key in shop_emblems:
+        label, badge_color = shop_emblems[emblem_key]
+        badge = Image.new("RGBA", (190, 190), (0, 0, 0, 0))
+        bd = ImageDraw.Draw(badge)
+        bd.ellipse((18, 18, 172, 172), fill=(8, 12, 23, 245),
+                   outline=(*badge_color, 255), width=7)
+        bd.ellipse((29, 29, 161, 161), outline=(235, 242, 250, 180), width=2)
+        bd.polygon([(95, 42), (137, 78), (125, 132), (95, 153),
+                    (65, 132), (53, 78)],
+                   fill=(*badge_color, 65), outline=(*badge_color, 255))
+        bd.text((95, 96), "ONYX", anchor="mm", font=_card_font(22, True),
+                fill=(250, 252, 255))
+        bd.text((95, 124), label, anchor="mm", font=_card_font(12, True),
+                fill=(250, 252, 255))
         image_rgba = image.convert("RGBA")
-        emblem_x = 890 - insignia.width // 2
-        emblem_y = 185 - insignia.height // 2
-        image_rgba.alpha_composite(insignia, (emblem_x, emblem_y))
+        image_rgba.alpha_composite(badge, (795, 105))
         image = image_rgba.convert("RGB")
         draw = ImageDraw.Draw(image)
+    else:
+        emblem_path = ASSET_DIR / PRESTIGE_EMBLEMS[rank_emblem_key]
+        if emblem_path.is_file():
+            with Image.open(emblem_path) as source_emblem:
+                insignia = source_emblem.convert("RGBA")
+                insignia.thumbnail((170, 170), Image.Resampling.LANCZOS)
+            image_rgba = image.convert("RGBA")
+            emblem_x = 890 - insignia.width // 2
+            emblem_y = 185 - insignia.height // 2
+            image_rgba.alpha_composite(insignia, (emblem_x, emblem_y))
+            image = image_rgba.convert("RGB")
+            draw = ImageDraw.Draw(image)
 
-    # Current-level XP progress only: no token, title, lifetime-XP, or theme text.
     needed = xp_needed(active_level)
     current_xp = int(row["xp"])
     ratio = min(1.0, max(0.0, current_xp / needed)) if needed else 1.0
