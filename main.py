@@ -45,7 +45,7 @@ async def get_prefix(bot, message):
 class CommunityBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=get_prefix, intents=intents, help_command=None)
-        self.db = Database(DB_PATH, DATABASE_)
+        self.db = Database(DB_PATH, DATABASE_URL)
         self.owner_id = OWNER_ID
         self.started_at = discord.utils.utcnow()
 
