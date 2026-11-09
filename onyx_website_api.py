@@ -11,6 +11,7 @@ Required environment variables:
     WEBSITE_ORIGIN
 
 Optional:
+    BOT_OWNER_ID
     PORT
 """
 
@@ -89,7 +90,10 @@ RARITY = {
 DATABASE_URL = os.environ["DATABASE_URL"]
 CLIENT_ID = os.environ["DISCORD_CLIENT_ID"]
 CLIENT_SECRET = os.environ["DISCORD_CLIENT_SECRET"]
-BOT_OWNER_ID = int(os.environ.get("BOT_OWNER_ID", "0") or 0)
+
+BOT_OWNER_ID = int(
+    os.environ.get("BOT_OWNER_ID", "0") or 0
+)
 
 SESSION_SECRET = os.environ["SESSION_SECRET"].encode()
 
@@ -123,6 +127,7 @@ def unb64(value: str) -> bytes:
 
 
 def signed_value(payload: dict) -> str:
+
     raw = json.dumps(
         payload,
         separators=(",", ":"),
@@ -141,7 +146,9 @@ def signed_value(payload: dict) -> str:
 
 
 def read_signed(value: str):
+
     try:
+
         encoded, signature = value.split(".", 1)
 
         expected = hmac.new(
@@ -168,6 +175,7 @@ def read_signed(value: str):
 
 
 def session_user(request):
+
     raw = request.cookies.get(COOKIE_NAME, "")
     payload = read_signed(raw)
 
@@ -181,9 +189,11 @@ def session_user(request):
 
 
 def require_user(request):
+
     user_id = session_user(request)
 
     if user_id is None:
+
         raise web.HTTPUnauthorized(
             text='{"error":"Sign in with Discord first."}',
             content_type="application/json"
@@ -193,6 +203,7 @@ def require_user(request):
 
 
 def json_error(message, status=400):
+
     return web.json_response(
         {"error": message},
         status=status
@@ -209,18 +220,22 @@ async def cors_and_security(request, handler):
     origin = request.headers.get("Origin")
 
     if origin and origin != WEBSITE_ORIGIN:
+
         return json_error(
             "Origin not allowed.",
             403
         )
 
     if request.method == "OPTIONS":
+
         response = web.Response(status=204)
 
     else:
+
         response = await handler(request)
 
     if origin == WEBSITE_ORIGIN:
+
         response.headers["Access-Control-Allow-Origin"] = WEBSITE_ORIGIN
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
@@ -356,11 +371,8 @@ async def get_profile_data(pool, user_id):
 
     return {
         "user_id": str(user_id),
-
         "tokens": int(wallet["tokens"]) if wallet else 0,
-
         "owned": owned,
-
         "equipped": dict(equipped) if equipped else {}
     }
 
@@ -436,6 +448,10 @@ async def login(request):
     raise response
 
 
+# ============================================================
+# DISCORD OAUTH CALLBACK
+# ============================================================
+
 async def oauth_callback(request):
 
     code = request.query.get("code")
@@ -469,6 +485,7 @@ async def oauth_callback(request):
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
 
+        # Exchange authorization code for access token
         async with session.post(
             "https://discord.com/api/oauth2/token",
 
@@ -495,16 +512,16 @@ async def oauth_callback(request):
 
             token_data = await token_response.json()
 
+        headers = {
+            "Authorization": (
+                "Bearer " + token_data["access_token"]
+            )
+        }
+
+        # Retrieve Discord user information
         async with session.get(
             "https://discord.com/api/users/@me",
-
-            headers={
-                "Authorization": (
-                    "Bearer " +
-                    token_data["access_token"]
-                )
-            }
-
+            headers=headers
         ) as user_response:
 
             if user_response.status != 200:
@@ -516,6 +533,22 @@ async def oauth_callback(request):
 
             discord_user = await user_response.json()
 
+        # Retrieve Discord server list
+        async with session.get(
+            "https://discord.com/api/users/@me/guilds",
+            headers=headers
+        ) as guild_response:
+
+            if guild_response.status != 200:
+
+                return json_error(
+                    "Could not retrieve your Discord servers.",
+                    502
+                )
+
+            discord_guilds = await guild_response.json()
+
+    # Validate Discord user ID
     if not str(discord_user.get("id", "")).isdigit():
 
         return json_error(
@@ -523,6 +556,28 @@ async def oauth_callback(request):
             502
         )
 
+    # Save server list in PostgreSQL
+    async with request.app["db"].acquire() as conn:
+
+        await conn.execute(
+            """
+            INSERT INTO onyx_web_guilds (
+                user_id,
+                guilds,
+                updated_at
+            )
+            VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
+
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+                guilds = EXCLUDED.guilds,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            int(discord_user["id"]),
+            json.dumps(discord_guilds)
+        )
+
+    # Create secure website session
     cookie = signed_value({
 
         "uid": str(discord_user["id"]),
@@ -538,42 +593,6 @@ async def oauth_callback(request):
         "exp": int(time.time()) + SESSION_SECONDS
 
     })
-
-            async with session.get(
-            "https://discord.com/api/users/@me/guilds",
-            headers={
-                "Authorization": (
-                    "Bearer " +
-                    token_data["access_token"]
-                )
-            }
-        ) as guild_response:
-
-            if guild_response.status != 200:
-                return json_error(
-                    "Could not retrieve your Discord servers.",
-                    502
-                )
-
-            discord_guilds = await guild_response.json()
-
-    async with request.app["db"].acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO onyx_web_guilds (
-                user_id,
-                guilds,
-                updated_at
-            )
-            VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
-            ON CONFLICT (user_id)
-            DO UPDATE SET
-                guilds = EXCLUDED.guilds,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            int(discord_user["id"]),
-            json.dumps(discord_guilds)
-        )
 
     response = web.HTTPFound(
         WEBSITE_ORIGIN + "/shop/"
@@ -653,20 +672,24 @@ async def me(request):
 
     })
 
+
 # ============================================================
 # DEVELOPER DASHBOARD ACCESS
 # ============================================================
 
 async def developer_access(request):
+
     user_id = require_user(request)
 
     if BOT_OWNER_ID and user_id == BOT_OWNER_ID:
+
         return web.json_response({
             "authorized": True,
             "role": "owner"
         })
 
     async with request.app["db"].acquire() as conn:
+
         row = await conn.fetchrow(
             """
             SELECT 1
@@ -680,6 +703,8 @@ async def developer_access(request):
         "authorized": row is not None,
         "role": "developer" if row else "user"
     })
+
+
 # ============================================================
 # SHOP CATALOG
 # ============================================================
@@ -1046,54 +1071,31 @@ def create_app():
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
 
-    app.router.add_get(
-        "/health",
-        health
-    )
+    app.router.add_get("/health", health)
 
-    app.router.add_get(
-        "/auth/discord",
-        login
-    )
+    app.router.add_get("/auth/discord", login)
 
     app.router.add_get(
         "/auth/discord/callback",
         oauth_callback
     )
 
-    app.router.add_post(
-        "/auth/logout",
-        logout
-    )
+    app.router.add_post("/auth/logout", logout)
+
+    app.router.add_get("/api/me", me)
 
     app.router.add_get(
-        "/api/me",
-        me
-    )
-    app.router.add_get(
-    "/api/developer/access",
-    developer_access
-    )
-    
-    app.router.add_get(
-        "/api/shop",
-        shop_catalog
+        "/api/developer/access",
+        developer_access
     )
 
-    app.router.add_post(
-        "/api/shop/buy",
-        buy_item
-    )
+    app.router.add_get("/api/shop", shop_catalog)
 
-    app.router.add_post(
-        "/api/equip",
-        equip_item
-    )
+    app.router.add_post("/api/shop/buy", buy_item)
 
-    app.router.add_get(
-        "/api/inventory",
-        inventory
-    )
+    app.router.add_post("/api/equip", equip_item)
+
+    app.router.add_get("/api/inventory", inventory)
 
     return app
 
