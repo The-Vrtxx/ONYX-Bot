@@ -403,7 +403,7 @@ async def login(request):
 
         "response_type": "code",
 
-        "scope": "identify",
+        "scope": "identify guilds",
 
         "state": state,
 
