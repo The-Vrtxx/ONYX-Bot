@@ -1026,7 +1026,11 @@ def create_app():
         "/api/me",
         me
     )
-
+    app.router.add_get(
+    "/api/developer/access",
+    developer_access
+    )
+    
     app.router.add_get(
         "/api/shop",
         shop_catalog
