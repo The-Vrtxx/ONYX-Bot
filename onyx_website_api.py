@@ -609,7 +609,33 @@ async def me(request):
 
     })
 
+# ============================================================
+# DEVELOPER DASHBOARD ACCESS
+# ============================================================
 
+async def developer_access(request):
+    user_id = require_user(request)
+
+    if BOT_OWNER_ID and user_id == BOT_OWNER_ID:
+        return web.json_response({
+            "authorized": True,
+            "role": "owner"
+        })
+
+    async with request.app["db"].acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT 1
+            FROM onyx_developers
+            WHERE user_id=$1
+            """,
+            user_id
+        )
+
+    return web.json_response({
+        "authorized": row is not None,
+        "role": "developer" if row else "user"
+    })
 # ============================================================
 # SHOP CATALOG
 # ============================================================
