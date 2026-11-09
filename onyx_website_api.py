@@ -268,6 +268,14 @@ async def ensure_tables(pool):
         )
     """)
 
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS onyx_web_guilds (
+            user_id BIGINT PRIMARY KEY,
+            guilds JSONB NOT NULL DEFAULT '[]'::jsonb,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
 
 # ============================================================
 # PROFILE DATA
@@ -530,6 +538,42 @@ async def oauth_callback(request):
         "exp": int(time.time()) + SESSION_SECONDS
 
     })
+
+            async with session.get(
+            "https://discord.com/api/users/@me/guilds",
+            headers={
+                "Authorization": (
+                    "Bearer " +
+                    token_data["access_token"]
+                )
+            }
+        ) as guild_response:
+
+            if guild_response.status != 200:
+                return json_error(
+                    "Could not retrieve your Discord servers.",
+                    502
+                )
+
+            discord_guilds = await guild_response.json()
+
+    async with request.app["db"].acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO onyx_web_guilds (
+                user_id,
+                guilds,
+                updated_at
+            )
+            VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+                guilds = EXCLUDED.guilds,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            int(discord_user["id"]),
+            json.dumps(discord_guilds)
+        )
 
     response = web.HTTPFound(
         WEBSITE_ORIGIN + "/shop/"
