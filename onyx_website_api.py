@@ -89,6 +89,7 @@ RARITY = {
 DATABASE_URL = os.environ["DATABASE_URL"]
 CLIENT_ID = os.environ["DISCORD_CLIENT_ID"]
 CLIENT_SECRET = os.environ["DISCORD_CLIENT_SECRET"]
+BOT_OWNER_ID = int(os.environ.get("BOT_OWNER_ID", "0") or 0)
 
 SESSION_SECRET = os.environ["SESSION_SECRET"].encode()
 
