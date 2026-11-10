@@ -22,6 +22,10 @@ from server_owner_api import (
     register_server_owner_routes,
     ensure_server_owner_tables,
 )
+from server_management_api import (
+    register_management_routes,
+    ensure_management_tables,
+)
 
 
 # SHOP CATALOG
@@ -589,6 +593,7 @@ async def on_startup(app):
     )
     await ensure_tables(app["db"])
     await ensure_server_owner_tables(app["db"])
+    await ensure_management_tables(app["db"])
 
 
 async def on_cleanup(app):
@@ -618,6 +623,7 @@ def create_app():
 
     # Protected server-owner settings endpoints.
     register_server_owner_routes(app, require_user)
+    register_management_routes(app)
     app.router.add_get("/api/shop", shop_catalog)
     app.router.add_post("/api/shop/buy", buy_item)
     app.router.add_post("/api/equip", equip_item)
