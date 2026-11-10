@@ -18,6 +18,10 @@ import asyncpg
 
 from website_commands import register_routes as register_command_routes
 from owner_portal_api import register_owner_routes
+from server_owner_api import (
+    register_server_owner_routes,
+    ensure_server_owner_tables,
+)
 
 
 # SHOP CATALOG
@@ -584,6 +588,7 @@ async def on_startup(app):
         url, min_size=1, max_size=5, command_timeout=20
     )
     await ensure_tables(app["db"])
+    await ensure_server_owner_tables(app["db"])
 
 
 async def on_cleanup(app):
@@ -610,6 +615,9 @@ def create_app():
     register_owner_routes(app, require_user, BOT_OWNER_ID)
 
     app.router.add_get("/api/guilds", get_manageable_guilds)
+
+    # Protected server-owner settings endpoints.
+    register_server_owner_routes(app, require_user)
     app.router.add_get("/api/shop", shop_catalog)
     app.router.add_post("/api/shop/buy", buy_item)
     app.router.add_post("/api/equip", equip_item)
