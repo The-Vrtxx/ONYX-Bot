@@ -39,6 +39,14 @@ class FilterSystem(commands.Cog):
                 PRIMARY KEY (guild_id, filter_name)
             )
         """)
+        await self.bot.db.execute("""
+            CREATE TABLE IF NOT EXISTS onyx_automod_events (
+                guild_id BIGINT NOT NULL, filter_name TEXT NOT NULL,
+                user_id BIGINT, channel_id BIGINT, punishment TEXT NOT NULL,
+                success INTEGER NOT NULL DEFAULT 0, result TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
     async def setting(self, guild_id, name):
         row = await self.bot.db.fetchone(
@@ -296,6 +304,12 @@ class FilterSystem(commands.Cog):
             if not detected:
                 continue
             ok, result = await self.punish(message, cfg, reason)
+            await self.bot.db.execute("""
+                INSERT INTO onyx_automod_events (
+                    guild_id,filter_name,user_id,channel_id,punishment,success,result,created_at
+                ) VALUES (?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+            """, (message.guild.id, cfg["filter_name"], message.author.id,
+                  message.channel.id, cfg["punishment"], int(bool(ok)), str(result)[:500]))
             await self.log_action(message.guild, message.author, cfg, reason, result)
             key = (message.guild.id, message.author.id, cfg["filter_name"])
             if cfg["filter_name"] in {"spam", "repeats"}:
