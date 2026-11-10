@@ -30,6 +30,7 @@ from aiohttp import web
 import asyncpg
 
 from website_commands import register_routes as register_command_routes
+from owner_portal_api import register_owner_routes
 
 
 # ============================================================
@@ -407,8 +408,13 @@ async def login(request):
 
     state = secrets.token_urlsafe(32)
 
+    next_path = request.query.get("next", "/shop/")
+    if next_path not in ("/shop/", "/dashboard/", "/owner/"):
+        next_path = "/shop/"
+
     state_cookie = signed_value({
         "state": state,
+        "next": next_path,
         "exp": int(time.time()) + 600
     })
 
@@ -575,8 +581,12 @@ async def oauth_callback(request):
         "exp": int(time.time()) + SESSION_SECONDS
     })
 
+    next_path = saved.get("next", "/shop/")
+    if next_path not in ("/shop/", "/dashboard/", "/owner/"):
+        next_path = "/shop/"
+
     response = web.HTTPFound(
-        WEBSITE_ORIGIN + "/shop/"
+        WEBSITE_ORIGIN + next_path
     )
 
     response.set_cookie(
@@ -1113,6 +1123,9 @@ def create_app():
         "/api/developer/access",
         developer_access
     )
+
+    # Private ONYX owner/developer control center
+    register_owner_routes(app, require_user, BOT_OWNER_ID)
 
     # Server Owner Dashboard
     app.router.add_get(
