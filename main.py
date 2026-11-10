@@ -370,17 +370,56 @@ COMMANDS_PER_PAGE = 4
 GROUP_OPTIONS_PER_PAGE = 25
 
 
+# Main help categories: group all cogs by their parent folder.
+HELP_FOLDER_LABELS = {
+    "administration": "Administration",
+    "community": "Community",
+    "core": "Utilities & Integrations",
+    "integrations": "Utilities & Integrations",
+    "leveling": "Leveling & Progression",
+    "logging": "Logging & Audit",
+    "moderation": "Moderation",
+    "security": "Security",
+    "server": "Server Management",
+    "support": "Support",
+    "voice": "Utilities & Integrations",
+}
+
+# AutoMod lives in cogs/security but belongs with moderation in the help menu.
+HELP_MODULE_OVERRIDES = {
+    "automod": "Moderation",
+}
+
+
 def get_help_categories():
+    """Return visible commands grouped under broad, top-level categories."""
     categories = {}
+
     for command in bot.walk_commands():
         if command.hidden:
             continue
-        module = command.cog.__class__.__module__.split(".")[-1] if command.cog else "core"
-        label = COG_LABELS.get(module, command.cog.qualified_name if command.cog else "Core")
+
+        if command.cog:
+            module_parts = command.cog.__class__.__module__.split(".")
+            module = module_parts[-1]
+            folder = module_parts[-2] if len(module_parts) >= 2 else "core"
+            label = HELP_MODULE_OVERRIDES.get(
+                module,
+                HELP_FOLDER_LABELS.get(folder, "Other")
+            )
+        else:
+            label = "Utilities & Integrations"
+
         categories.setdefault(label, []).append(command)
+
     for commands_in_category in categories.values():
-        commands_in_category.sort(key=lambda c: c.qualified_name.casefold())
-    return dict(sorted(categories.items(), key=lambda item: item[0].casefold()))
+        commands_in_category.sort(
+            key=lambda c: c.qualified_name.casefold()
+        )
+
+    return dict(
+        sorted(categories.items(), key=lambda item: item[0].casefold())
+    )
 
 
 def _command_usage(prefix, command):
