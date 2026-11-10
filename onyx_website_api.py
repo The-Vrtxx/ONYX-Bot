@@ -1,3 +1,4 @@
+
 """
 ONYX Website API
 Separate Render web service sharing the bot's PostgreSQL database.
@@ -27,6 +28,8 @@ from urllib.parse import urlencode
 import aiohttp
 from aiohttp import web
 import asyncpg
+
+from website_commands import register_routes as register_command_routes
 
 
 # ============================================================
@@ -1125,6 +1128,9 @@ def create_app():
     app.router.add_post("/api/equip", equip_item)
 
     app.router.add_get("/api/inventory", inventory)
+
+    # Public command catalog
+    register_command_routes(app)
 
     return app
 
