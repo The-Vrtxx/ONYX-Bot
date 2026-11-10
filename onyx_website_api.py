@@ -41,7 +41,6 @@ SHOP = {
         "obsidian": ("Obsidian Frame", 20, "A dark, premium frame."),
         "legendary": ("Legendary Frame", 25, "The highest-tier frame."),
     },
-
     "theme": {
         "frost": ("Frost Theme", 5, "Cool blue and ice tones."),
         "inferno": ("Inferno Theme", 5, "Fiery red and orange tones."),
@@ -49,7 +48,6 @@ SHOP = {
         "eclipse": ("Eclipse Theme", 15, "Purple eclipse styling."),
         "void": ("Void Theme", 20, "Deep-space purple styling."),
     },
-
     "emblem": {
         "veteran": ("Veteran Emblem", 5, "A Prestige Master Veteran emblem."),
         "elite": ("Elite Emblem", 10, "An Elite emblem."),
@@ -57,7 +55,6 @@ SHOP = {
         "warlord": ("Warlord Emblem", 20, "A Warlord emblem."),
         "mythic": ("Mythic Emblem", 25, "A Mythic emblem."),
     },
-
     "effect": {
         "teal_glow": ("Teal Glow", 10, "A teal glow around your card."),
         "silver_shine": ("Silver Shine", 15, "A silver highlight effect."),
@@ -65,7 +62,6 @@ SHOP = {
         "cosmic_aura": ("Cosmic Aura", 25, "A cosmic purple aura."),
     },
 }
-
 
 SLOTS = {
     "frame": ("frame_id", "default"),
@@ -148,7 +144,6 @@ def signed_value(payload: dict) -> str:
 def read_signed(value: str):
 
     try:
-
         encoded, signature = value.split(".", 1)
 
         expected = hmac.new(
@@ -193,7 +188,6 @@ def require_user(request):
     user_id = session_user(request)
 
     if user_id is None:
-
         raise web.HTTPUnauthorized(
             text='{"error":"Sign in with Discord first."}',
             content_type="application/json"
@@ -220,22 +214,17 @@ async def cors_and_security(request, handler):
     origin = request.headers.get("Origin")
 
     if origin and origin != WEBSITE_ORIGIN:
-
         return json_error(
             "Origin not allowed.",
             403
         )
 
     if request.method == "OPTIONS":
-
         response = web.Response(status=204)
-
     else:
-
         response = await handler(request)
 
     if origin == WEBSITE_ORIGIN:
-
         response.headers["Access-Control-Allow-Origin"] = WEBSITE_ORIGIN
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
@@ -384,7 +373,6 @@ async def get_profile_data(pool, user_id):
 async def health(request):
 
     try:
-
         await request.app["db"].fetchval("SELECT 1")
 
         return web.json_response({
@@ -393,7 +381,6 @@ async def health(request):
         })
 
     except Exception:
-
         return json_error(
             "Database unavailable.",
             503
@@ -415,18 +402,13 @@ async def login(request):
 
     params = {
         "client_id": CLIENT_ID,
-
         "redirect_uri": (
             PUBLIC_BASE_URL +
             "/auth/discord/callback"
         ),
-
         "response_type": "code",
-
         "scope": "identify guilds",
-
         "state": state,
-
         "prompt": "consent"
     }
 
@@ -470,7 +452,6 @@ async def oauth_callback(request):
             returned_state
         )
     ):
-
         return json_error(
             "Discord sign-in could not be verified. Please try again.",
             400
@@ -488,7 +469,6 @@ async def oauth_callback(request):
         # Exchange authorization code for access token
         async with session.post(
             "https://discord.com/api/oauth2/token",
-
             data={
                 "client_id": CLIENT_ID,
                 "client_secret": CLIENT_SECRET,
@@ -496,15 +476,12 @@ async def oauth_callback(request):
                 "code": code,
                 "redirect_uri": redirect_uri
             },
-
             headers={
                 "Content-Type": "application/x-www-form-urlencoded"
             }
-
         ) as token_response:
 
             if token_response.status != 200:
-
                 return json_error(
                     "Discord token exchange failed. Please try again.",
                     502
@@ -525,7 +502,6 @@ async def oauth_callback(request):
         ) as user_response:
 
             if user_response.status != 200:
-
                 return json_error(
                     "Could not retrieve your Discord account.",
                     502
@@ -540,7 +516,6 @@ async def oauth_callback(request):
         ) as guild_response:
 
             if guild_response.status != 200:
-
                 return json_error(
                     "Could not retrieve your Discord servers.",
                     502
@@ -550,7 +525,6 @@ async def oauth_callback(request):
 
     # Validate Discord user ID
     if not str(discord_user.get("id", "")).isdigit():
-
         return json_error(
             "Discord returned an invalid account.",
             502
@@ -579,19 +553,14 @@ async def oauth_callback(request):
 
     # Create secure website session
     cookie = signed_value({
-
         "uid": str(discord_user["id"]),
-
         "username": str(
             discord_user.get("global_name")
             or discord_user.get("username")
             or "Discord User"
         ),
-
         "avatar": discord_user.get("avatar"),
-
         "exp": int(time.time()) + SESSION_SECONDS
-
     })
 
     response = web.HTTPFound(
@@ -658,18 +627,13 @@ async def me(request):
         )
 
     return web.json_response({
-
         "id": str(user_id),
-
         "username": session.get(
             "username",
             "Discord User"
         ),
-
         "avatar": session.get("avatar"),
-
         "tokens": int(wallet["tokens"]) if wallet else 0
-
     })
 
 
@@ -682,7 +646,6 @@ async def developer_access(request):
     user_id = require_user(request)
 
     if BOT_OWNER_ID and user_id == BOT_OWNER_ID:
-
         return web.json_response({
             "authorized": True,
             "role": "owner"
@@ -702,6 +665,85 @@ async def developer_access(request):
     return web.json_response({
         "authorized": row is not None,
         "role": "developer" if row else "user"
+    })
+
+
+# ============================================================
+# SERVER OWNER DASHBOARD - SERVER LIST
+# ============================================================
+
+async def get_manageable_guilds(request):
+
+    user_id = require_user(request)
+
+    async with request.app["db"].acquire() as conn:
+
+        row = await conn.fetchrow(
+            """
+            SELECT guilds
+            FROM onyx_web_guilds
+            WHERE user_id=$1
+            """,
+            user_id
+        )
+
+    if not row:
+        return web.json_response({
+            "guilds": [],
+            "count": 0
+        })
+
+    guilds = row["guilds"]
+
+    # asyncpg may return JSONB as a string
+    if isinstance(guilds, str):
+        try:
+            guilds = json.loads(guilds)
+        except json.JSONDecodeError:
+            guilds = []
+
+    manageable = []
+
+    for guild in guilds:
+
+        try:
+            guild_id = str(guild.get("id", ""))
+            permissions = int(guild.get("permissions", "0"))
+            is_owner = bool(guild.get("owner", False))
+
+            # Discord permission flags:
+            # Administrator = 8
+            # Manage Server = 32
+            is_admin = bool(permissions & 8)
+            can_manage = bool(permissions & 32)
+
+            if not guild_id.isdigit():
+                continue
+
+            if not (is_owner or is_admin or can_manage):
+                continue
+
+            manageable.append({
+                "id": guild_id,
+                "name": str(
+                    guild.get("name", "Unknown Server")
+                ),
+                "icon": guild.get("icon"),
+                "owner": is_owner,
+                "administrator": is_admin,
+                "manage_server": can_manage
+            })
+
+        except (TypeError, ValueError):
+            continue
+
+    manageable.sort(
+        key=lambda guild: guild["name"].lower()
+    )
+
+    return web.json_response({
+        "guilds": manageable,
+        "count": len(manageable)
     })
 
 
@@ -736,40 +778,26 @@ async def shop_catalog(request):
             name, cost, description = item_data
 
             catalog.append({
-
                 "category": category,
-
                 "id": item_id,
-
                 "name": name,
-
                 "cost": cost,
-
                 "description": description,
-
                 "rarity": RARITY[cost],
-
                 "owned": (
                     category,
                     item_id
                 ) in owned,
-
                 "equipped": (
                     equipped.get(column) == item_id
                 )
-
             })
 
     return web.json_response({
-
         "tokens": data["tokens"],
-
         "items": catalog,
-
         "owned": data["owned"],
-
         "equipped": data["equipped"]
-
     })
 
 
@@ -782,20 +810,14 @@ async def buy_item(request):
     user_id = require_user(request)
 
     try:
-
         body = await request.json()
-
     except Exception:
-
-        return json_error(
-            "Invalid request body."
-        )
+        return json_error("Invalid request body.")
 
     category = body.get("category")
     item_id = body.get("item_id")
 
     if category not in SHOP or item_id not in SHOP[category]:
-
         return json_error(
             "That shop item does not exist."
         )
@@ -843,7 +865,6 @@ async def buy_item(request):
                 )
 
                 if already:
-
                     return json_error(
                         "You already own this item.",
                         409
@@ -852,15 +873,10 @@ async def buy_item(request):
                 balance = int(wallet["tokens"])
 
                 if balance < cost:
-
                     return web.json_response({
-
                         "error": "Not enough Prestige Tokens.",
-
                         "tokens": balance,
-
                         "required": cost
-
                     }, status=409)
 
                 await conn.execute(
@@ -890,21 +906,14 @@ async def buy_item(request):
                 remaining = balance - cost
 
         return web.json_response({
-
             "ok": True,
-
             "message": f"Unlocked {name}.",
-
             "tokens": remaining,
-
             "category": category,
-
             "item_id": item_id
-
         })
 
     except asyncpg.UniqueViolationError:
-
         return json_error(
             "You already own this item.",
             409
@@ -920,20 +929,14 @@ async def equip_item(request):
     user_id = require_user(request)
 
     try:
-
         body = await request.json()
-
     except Exception:
-
-        return json_error(
-            "Invalid request body."
-        )
+        return json_error("Invalid request body.")
 
     category = body.get("category")
     item_id = body.get("item_id")
 
     if category not in SLOTS:
-
         return json_error(
             "Choose a valid cosmetic slot."
         )
@@ -942,7 +945,6 @@ async def equip_item(request):
         item_id != SLOTS[category][1]
         and item_id not in SHOP[category]
     ):
-
         return json_error(
             "That cosmetic does not exist."
         )
@@ -980,7 +982,6 @@ async def equip_item(request):
                 )
 
                 if not owned:
-
                     return json_error(
                         "You must own that cosmetic before equipping it.",
                         403
@@ -997,13 +998,9 @@ async def equip_item(request):
             )
 
     return web.json_response({
-
         "ok": True,
-
         "category": category,
-
         "equipped": item_id
-
     })
 
 
@@ -1032,7 +1029,6 @@ async def on_startup(app):
     url = DATABASE_URL
 
     if url.startswith("postgres://"):
-
         url = (
             "postgresql://" +
             url[len("postgres://"):]
@@ -1045,9 +1041,7 @@ async def on_startup(app):
         command_timeout=20
     )
 
-    await ensure_tables(
-        app["db"]
-    )
+    await ensure_tables(app["db"])
 
 
 async def on_cleanup(app):
@@ -1089,6 +1083,13 @@ def create_app():
         developer_access
     )
 
+    # Server Owner Dashboard
+    app.router.add_get(
+        "/api/guilds",
+        get_manageable_guilds
+    )
+
+    # Shop
     app.router.add_get("/api/shop", shop_catalog)
 
     app.router.add_post("/api/shop/buy", buy_item)
