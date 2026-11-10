@@ -18,6 +18,24 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0") or 0)
 DB_PATH = os.getenv("DATABASE_PATH", "data/bot.sqlite3")
 DATABASE_URL = os.getenv("DATABASE_URL")
+BOT_ROOT = Path(__file__).resolve().parent
+COG_ROOT = BOT_ROOT / "cogs"
+
+
+def discover_cog_extensions():
+    """Return every cog extension inside cogs/, including category folders."""
+    extensions = []
+    if not COG_ROOT.is_dir():
+        log.warning("Cog directory does not exist: %s", COG_ROOT)
+        return extensions
+
+    for path in COG_ROOT.rglob("*.py"):
+        if path.name.startswith("_") or path.name == "aliases.py":
+            continue
+        relative_path = path.relative_to(BOT_ROOT).with_suffix("")
+        extensions.append(".".join(relative_path.parts))
+
+    return sorted(set(extensions))
 
 intents = discord.Intents.default()
 intents.members = True
@@ -65,17 +83,19 @@ class CommunityBot(commands.Bot):
             ) from exc
 
         loaded, failed = [], []
-        for path in sorted(Path("cogs").glob("*.py")):
-            if path.name.startswith("_"):
-                continue
-            extension = f"cogs.{path.stem}"
+        for extension in discover_cog_extensions():
+            cog_name = extension.removeprefix("cogs.")
             try:
                 await self.load_extension(extension)
-                loaded.append(path.stem)
-                log.info("Loaded cog: %s", path.stem)
+                loaded.append(cog_name)
+                log.info("Loaded cog: %s", extension)
             except Exception as exc:
-                failed.append(path.stem)
-                log.exception("Could not load cog %s (%s).", path.stem, type(exc).__name__)
+                failed.append(cog_name)
+                log.exception(
+                    "Could not load cog %s (%s).",
+                    extension,
+                    type(exc).__name__
+                )
 
         self.tree.clear_commands(guild=None)
         await self.tree.sync()
@@ -201,41 +221,66 @@ async def on_command_error(ctx, error):
 @bot.group(name="reload", invoke_without_command=True)
 @commands.is_owner()
 async def reload_cogs(ctx, *, cog: str = None):
-    """Reload one cog, or all loaded cogs. Owner only."""
-    files = sorted(p.stem for p in Path("cogs").glob("*.py") if not p.name.startswith("_"))
+    """Reload one cog by name/path, or all cogs. Owner only."""
+    extensions = discover_cog_extensions()
+
     if cog:
-        cog = cog.strip().removeprefix("cogs.").removesuffix(".py")
-        if cog not in files:
-            return await ctx.send(
-                f"Couldn't find cog `{cog}`. Available cogs: " +
-                ", ".join(f"`{name}`" for name in files)
+        requested = cog.strip().removesuffix(".py")
+        if requested.startswith("cogs."):
+            requested = requested[len("cogs."):]
+
+        matches = []
+        for extension in extensions:
+            short_name = extension.removeprefix("cogs.")
+            if requested == short_name or requested == short_name.split(".")[-1]:
+                matches.append(extension)
+
+        if not matches:
+            available = ", ".join(
+                f"`{name.removeprefix('cogs.')}`" for name in extensions
             )
-        extension = f"cogs.{cog}"
+            return await ctx.send(
+                f"Couldn't find cog `{requested}`. Available cogs: {available}"
+            )
+
+        if len(matches) > 1:
+            choices = ", ".join(
+                f"`{name.removeprefix('cogs.')}`" for name in matches
+            )
+            return await ctx.send(
+                f"`{requested}` matches more than one cog. Use its full folder path: {choices}"
+            )
+
+        extension = matches[0]
+        cog_name = extension.removeprefix("cogs.")
         try:
             if extension in bot.extensions:
                 await bot.reload_extension(extension)
             else:
                 await bot.load_extension(extension)
-            return await ctx.send(f"Reloaded `{cog}` successfully.")
+            return await ctx.send(f"Reloaded `{cog_name}` successfully.")
         except Exception as exc:
             log.exception("Failed to reload extension %s", extension)
-            return await ctx.send(f"Couldn't reload `{cog}`: `{type(exc).__name__}: {exc}`")
+            return await ctx.send(
+                f"Couldn't reload `{cog_name}`: `{type(exc).__name__}: {exc}`"
+            )
 
     good, bad = [], []
-    for name in files:
-        extension = f"cogs.{name}"
+    for extension in extensions:
+        cog_name = extension.removeprefix("cogs.")
         try:
             if extension in bot.extensions:
                 await bot.reload_extension(extension)
             else:
                 await bot.load_extension(extension)
-            good.append(name)
+            good.append(cog_name)
         except Exception as exc:
             log.exception("Failed to reload extension %s", extension)
-            bad.append(f"{name}: {type(exc).__name__}: {exc}")
+            bad.append(f"{cog_name}: {type(exc).__name__}: {exc}")
+
     message = f"Reload complete. **{len(good)}** loaded/reloaded."
     if good:
-        message += "\n**Successful:** " + ", ".join(f"`{n}`" for n in good)
+        message += "\n**Successful:** " + ", ".join(f"`{name}`" for name in good)
     if bad:
         message += "\n**Failed:** " + "; ".join(bad)
     await ctx.send(message)
@@ -625,6 +670,8 @@ def _owner_category(command):
         "roles": "Roles", "member_tools": "Member Tools", "server_setup": "Server Setup",
         "server_tools": "Server Tools", "tickets": "Tickets",
         "channel_manager": "Channel Management", "utility": "Utilities",
+        "developers": "Administration", "presence": "Administration",
+        "shh": "Administration", "stress_test": "Administration",
         "core": "Core / Owner Tools",
     }
     return labels.get(module, module.replace("_", " ").title())
