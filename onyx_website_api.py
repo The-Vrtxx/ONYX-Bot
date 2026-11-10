@@ -280,6 +280,15 @@ async def ensure_tables(pool):
         )
     """)
 
+    # Tracks Discord servers where ONYX is installed.
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS onyx_bot_guilds (
+            guild_id BIGINT PRIMARY KEY,
+            guild_name TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
 
 # ============================================================
 # PROFILE DATA
@@ -678,7 +687,7 @@ async def get_manageable_guilds(request):
 
     async with request.app["db"].acquire() as conn:
 
-        row = await conn.fetchrow(
+        user_row = await conn.fetchrow(
             """
             SELECT guilds
             FROM onyx_web_guilds
@@ -687,13 +696,21 @@ async def get_manageable_guilds(request):
             user_id
         )
 
-    if not row:
+        installed_rows = await conn.fetch(
+            """
+            SELECT guild_id, guild_name
+            FROM onyx_bot_guilds
+            """
+        )
+
+    if not user_row:
         return web.json_response({
             "guilds": [],
-            "count": 0
+            "count": 0,
+            "message": "Please sign in with Discord again."
         })
 
-    guilds = row["guilds"]
+    guilds = user_row["guilds"]
 
     # asyncpg may return JSONB as a string
     if isinstance(guilds, str):
@@ -701,6 +718,12 @@ async def get_manageable_guilds(request):
             guilds = json.loads(guilds)
         except json.JSONDecodeError:
             guilds = []
+
+    # Only include servers currently tracked by the ONYX bot.
+    installed = {
+        str(row["guild_id"]): str(row["guild_name"])
+        for row in installed_rows
+    }
 
     manageable = []
 
@@ -720,21 +743,26 @@ async def get_manageable_guilds(request):
             if not guild_id.isdigit():
                 continue
 
+            # Hide servers where ONYX is not installed.
+            if guild_id not in installed:
+                continue
+
             if not (is_owner or is_admin or can_manage):
                 continue
 
             manageable.append({
                 "id": guild_id,
                 "name": str(
-                    guild.get("name", "Unknown Server")
+                    guild.get("name") or installed[guild_id]
                 ),
                 "icon": guild.get("icon"),
                 "owner": is_owner,
                 "administrator": is_admin,
-                "manage_server": can_manage
+                "manage_server": can_manage,
+                "bot_installed": True
             })
 
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, AttributeError):
             continue
 
     manageable.sort(
