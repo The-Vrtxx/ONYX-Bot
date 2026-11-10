@@ -27,7 +27,7 @@ class ServerSetup(commands.Cog):
     async def setup_jail(self, ctx):
         jail_cog = self.bot.get_cog("Jail")
         if not jail_cog:
-            return await ctx.send("The jail module isn't loaded. Check the Render logs and make sure `cogs/jail.py` was uploaded.")
+            return await ctx.send("The jail module isn't loaded. Check the Render logs and make sure `cogs/moderation/jail.py` was uploaded.")
         await jail_cog.setup_jail(ctx)
 
     @commands.command(name="settings", help="View this server's ONYX configuration.")
