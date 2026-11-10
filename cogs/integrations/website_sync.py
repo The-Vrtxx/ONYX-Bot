@@ -1,4 +1,3 @@
-
 import json
 import logging
 
@@ -7,6 +6,7 @@ from discord.ext import commands
 log = logging.getLogger("bot.website_sync")
 
 
+# Kept as a fallback for cogs that are not inside one of the main folders.
 COG_LABELS = {
     "automod": "AutoMod",
     "channel_manager": "Channel Management",
@@ -30,6 +30,27 @@ COG_LABELS = {
     "voicemaster": "Voice Master",
     "welcome": "Welcome & Goodbye",
     "reports": "Reports",
+}
+
+
+# These match the broad categories used by the main.py help menu.
+HELP_FOLDER_LABELS = {
+    "administration": "Administration",
+    "community": "Community",
+    "core": "Utilities & Integrations",
+    "integrations": "Utilities & Integrations",
+    "leveling": "Leveling & Progression",
+    "logging": "Logging & Audit",
+    "moderation": "Moderation",
+    "security": "Security",
+    "server": "Server Management",
+    "support": "Support",
+    "voice": "Utilities & Integrations",
+}
+
+# AutoMod lives in cogs/security but belongs with Moderation in the help menu.
+HELP_MODULE_OVERRIDES = {
+    "automod": "Moderation",
 }
 
 
@@ -102,16 +123,18 @@ class WebsiteSync(commands.Cog):
             if command.hidden:
                 continue
 
-            module = (
-                command.cog.__class__.__module__.split(".")[-1]
-                if command.cog
-                else "core"
-            )
+            if command.cog:
+                module_parts = command.cog.__class__.__module__.split(".")
+                module = module_parts[-1]
+                folder = module_parts[-2] if len(module_parts) >= 2 else "core"
 
-            category = COG_LABELS.get(
-                module,
-                command.cog.qualified_name if command.cog else "Core"
-            )
+                category = HELP_MODULE_OVERRIDES.get(
+                    module,
+                    HELP_FOLDER_LABELS.get(folder, "Other")
+                )
+            else:
+                module = "core"
+                category = "Utilities & Integrations"
 
             usage = f",{command.qualified_name}"
 
