@@ -1,8 +1,4 @@
-"""ONYX global leveling, Prestige progression, and Prestige Master titles.
-
-Replace cogs/levels.py with this file. Existing global profiles and server-specific
-XP settings/rewards remain compatible with the current ONYX database schema.
-"""
+"""ONYX global leveling, Prestige progression, and Prestige Master titles."""
 import random
 import re
 import time
@@ -16,7 +12,7 @@ import discord
 from discord.ext import commands
 
 COLOR = discord.Color.from_rgb(25, 190, 190)
-ASSET_DIR = Path(__file__).resolve().parent.parent / "assets" / "onyx_prestige"
+ASSET_DIR = Path(__file__).resolve().parents[2] / "assets" / "onyx_prestige"
 PRESTIGE_EMBLEMS = {
     0: "prestige_0.PNG",
     1: "prestige_1.PNG",
