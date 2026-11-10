@@ -68,16 +68,11 @@ class Shh(commands.Cog):
 
     @commands.command(name="shh", help="Toggle the configured special role.", hidden=True)
     @commands.guild_only()
+    @commands.check(is_bot_owner)
     async def shh(self, ctx, member_text=None):
         member = await resolve_member(ctx, member_text)
         if member is None:
             return await self._temporary_reply(ctx, "Member not found. Use a valid mention or numeric user ID.")
-        allowed = await self.bot.db.fetchone(
-            "SELECT 1 FROM shh_whitelist WHERE guild_id=? AND user_id=?",
-            (ctx.guild.id, ctx.author.id)
-        )
-        if not allowed:
-            return await self._temporary_reply(ctx, "You aren't authorized to use this command.")
         setting = await self.bot.db.fetchone(
             "SELECT role_id FROM shh_settings WHERE guild_id=?", (ctx.guild.id,)
         )
