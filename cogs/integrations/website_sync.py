@@ -1,8 +1,9 @@
 
 import json
 import logging
+import re
 
-from discord.ext import commands
+from discord.ext import import commands
 
 log = logging.getLogger("bot.website_sync")
 
@@ -24,6 +25,38 @@ HELP_FOLDER_LABELS = {
 HELP_MODULE_OVERRIDES = {
     "automod": "Moderation",
 }
+
+
+def is_owner_restricted(command):
+    """Detect owner-only checks on a command or any parent group."""
+    current = command
+
+    while current is not None:
+        for check in getattr(current, "checks", []):
+            check_name = getattr(check, "__qualname__", "")
+            if "is_owner" in check_name.casefold():
+                return True
+
+        current = getattr(current, "parent", None)
+
+    # Some owner-only commands use documentation instead of the
+    # built-in is_owner decorator. Keep those out of the public directory.
+    description = " ".join(
+        str(value or "")
+        for value in (
+            getattr(command, "help", None),
+            getattr(command, "brief", None),
+        )
+    )
+
+    if re.search(
+        r"\bowner[- ]only\b|\(owner\)",
+        description,
+        flags=re.IGNORECASE,
+    ):
+        return True
+
+    return False
 
 
 class WebsiteSync(commands.Cog):
@@ -113,11 +146,13 @@ class WebsiteSync(commands.Cog):
         )
 
     def build_command_catalog(self):
-        """Build a catalog from commands currently loaded by Discord.py."""
+        """Build a catalog containing only publicly usable commands."""
         catalog = []
+        excluded = []
 
         for command in self.bot.walk_commands():
-            if command.hidden:
+            if command.hidden or is_owner_restricted(command):
+                excluded.append(command.qualified_name)
                 continue
 
             if command.cog:
@@ -160,6 +195,18 @@ class WebsiteSync(commands.Cog):
                 item["command_name"].casefold()
             )
         )
+
+        log.info(
+            "Command catalog built: %s public commands; %s private commands excluded.",
+            len(catalog),
+            len(excluded)
+        )
+
+        if excluded:
+            log.debug(
+                "Excluded private commands: %s",
+                ", ".join(sorted(excluded))
+            )
 
         return catalog
 
