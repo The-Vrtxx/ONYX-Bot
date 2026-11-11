@@ -307,7 +307,7 @@ async def export_commands(ctx):
     commands_list = []
 
     for command in bot.walk_commands():
-        if command.hidden:
+        if command.hidden or _is_owner_restricted(command):
             continue
 
         module = (
@@ -370,7 +370,6 @@ COMMANDS_PER_PAGE = 4
 GROUP_OPTIONS_PER_PAGE = 25
 
 
-# Main help categories: group all cogs by their parent folder.
 HELP_FOLDER_LABELS = {
     "administration": "Administration",
     "community": "Community",
@@ -385,21 +384,62 @@ HELP_FOLDER_LABELS = {
     "voice": "Utilities & Integrations",
 }
 
-# AutoMod lives in cogs/security but belongs with moderation in the help menu.
 HELP_MODULE_OVERRIDES = {
     "automod": "Moderation",
 }
 
 
-def get_help_categories():
-    """Return visible commands grouped under broad, top-level categories."""
+def _is_owner_restricted(command):
+    """Identify owner-only commands, including commands inside owner-only groups."""
+    current = command
+    while current is not None:
+        for check in getattr(current, "checks", []):
+            check_name = getattr(check, "__qualname__", "").casefold()
+            if "is_owner" in check_name:
+                return True
+        current = getattr(current, "parent", None)
+
+    description = " ".join(str(value or "") for value in (
+        getattr(command, "help", None),
+        getattr(command, "brief", None),
+    )).casefold()
+    if "owner only" in description or "owner-only" in description or "(owner)" in description:
+        return True
+
+    return command.qualified_name in {
+        "setupreport", "setupcentralreports", "reload"
+    }
+
+
+def _owner_category(command):
+    module = command.cog.__class__.__module__.split(".")[-1] if command.cog else "core"
+    labels = {
+        "reports": "Reports", "moderation": "Moderation",
+        "moderation_plus": "Moderation Extras", "automod": "AutoMod & Filters",
+        "security": "Security & Protection", "protection": "Anti-Raid Protection",
+        "backup": "Backups", "logging": "Logging", "levels": "Levels & Engagement",
+        "roles": "Roles", "member_tools": "Member Tools", "server_setup": "Server Setup",
+        "server_tools": "Server Tools", "tickets": "Tickets",
+        "channel_manager": "Channel Management", "utility": "Utilities",
+        "developers": "Administration", "presence": "Administration",
+        "shh": "Administration", "stress_test": "Administration",
+        "core": "Core / Owner Tools",
+    }
+    return labels.get(module, module.replace("_", " ").title())
+
+
+def get_help_categories(owner_mode=False):
+    """Group either public commands or hidden/owner-restricted commands."""
     categories = {}
 
     for command in bot.walk_commands():
-        if command.hidden:
+        restricted = command.hidden or _is_owner_restricted(command)
+        if owner_mode != restricted:
             continue
 
-        if command.cog:
+        if owner_mode:
+            label = _owner_category(command)
+        elif command.cog:
             module_parts = command.cog.__class__.__module__.split(".")
             module = module_parts[-1]
             folder = module_parts[-2] if len(module_parts) >= 2 else "core"
@@ -412,14 +452,10 @@ def get_help_categories():
 
         categories.setdefault(label, []).append(command)
 
-    for commands_in_category in categories.values():
-        commands_in_category.sort(
-            key=lambda c: c.qualified_name.casefold()
-        )
+    for command_list in categories.values():
+        command_list.sort(key=lambda item: item.qualified_name.casefold())
 
-    return dict(
-        sorted(categories.items(), key=lambda item: item[0].casefold())
-    )
+    return dict(sorted(categories.items(), key=lambda item: item[0].casefold()))
 
 
 def _command_usage(prefix, command):
@@ -442,22 +478,31 @@ def _command_detail_embed(prefix, command):
     return embed
 
 
-def _help_embed(prefix, category=None, page=0):
-    categories = get_help_categories()
-    embed = discord.Embed(
-        title="ONYX" if category is None else f"ONYX • {category}",
-        url="https://onyxdiscord.com",
-        color=discord.Color.from_rgb(44, 38, 67)
-    )
+def _help_embed(prefix, category=None, page=0, owner_mode=False, categories=None):
+    categories = categories if categories is not None else get_help_categories(owner_mode)
+    directory_name = "Owner Command Directory" if owner_mode else "Help Menu"
     if category is None:
+        embed = discord.Embed(
+            title=f"ONYX • {directory_name}",
+            url="https://onyxdiscord.com",
+            color=discord.Color.from_rgb(44, 38, 67)
+        )
         total = sum(len(items) for items in categories.values())
-        embed.description = "\n".join([
-            "Welcome to the ONYX help menu.", "",
-            "Choose a category below to browse its commands.",
-            f"**{len(categories)} categories • {total} commands**", "",
-            f"Use `{prefix}help <command>` for details about a command."
-        ])
+        if owner_mode:
+            intro = "Owner-only and hidden commands are organized below."
+            usage = f"Use `{prefix}owner commands` to reopen this directory."
+        else:
+            intro = "Welcome to the ONYX help menu.\n\nChoose a category below to browse its commands."
+            usage = f"Use `{prefix}help <command>` for details about a command."
+        embed.description = (
+            f"{intro}\n**{len(categories)} categories • {total} commands**\n\n{usage}"
+        )
     else:
+        embed = discord.Embed(
+            title=f"ONYX • {category}",
+            url="https://onyxdiscord.com",
+            color=discord.Color.from_rgb(44, 38, 67)
+        )
         items = categories.get(category, [])
         pages = max(1, (len(items) + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
         page = max(0, min(page, pages - 1))
@@ -466,16 +511,21 @@ def _help_embed(prefix, category=None, page=0):
             f"`{_command_usage(prefix, cmd)}`\n{(cmd.help or cmd.brief or 'No description available.')[:180]}"
             for cmd in subset
         ]
-        embed.description = "\n\n".join(lines) + f"\n\n`{prefix}help <command>` for more details"
+        embed.description = "\n\n".join(lines) or "No commands in this category."
+        command_hint = f"`{prefix}owner commands`" if owner_mode else f"`{prefix}help <command>`"
+        embed.description += f"\n\nUse {command_hint} for the directory."
         if pages > 1:
             embed.description += f" • Page {page + 1}/{pages}"
-    embed.set_footer(text="ONYX • Prefix Commands Only")
+    embed.set_footer(text="ONYX • Owner Tools" if owner_mode else "ONYX • Prefix Commands Only")
     return embed
 
 
 def _visible_group_commands(group):
     return sorted(
-        (child for child in group.walk_commands() if not child.hidden),
+        (
+            child for child in group.walk_commands()
+            if not child.hidden and not _is_owner_restricted(child)
+        ),
         key=lambda child: child.qualified_name.casefold()
     )
 
@@ -510,34 +560,49 @@ class HelpCategorySelect(discord.ui.Select):
         self.help_view = view
         options = [
             discord.SelectOption(label=name[:100], description=f"{len(items)} commands", value=name)
-            for name, items in get_help_categories().items()
+            for name, items in view.categories.items()
         ][:25]
-        super().__init__(placeholder="Select a command category...", min_values=1, max_values=1, options=options, row=0)
+        super().__init__(
+            placeholder="Select a command category...",
+            min_values=1, max_values=1, options=options, row=0
+        )
 
     async def callback(self, interaction):
         self.help_view.category = self.values[0]
         self.help_view.page = 0
         self.help_view.refresh_controls()
         await interaction.response.edit_message(
-            embed=_help_embed(self.help_view.prefix, self.help_view.category, 0),
+            embed=_help_embed(
+                self.help_view.prefix, self.help_view.category, 0,
+                self.help_view.owner_mode, self.help_view.categories
+            ),
             view=self.help_view
         )
 
 
 class OnyxHelpView(discord.ui.View):
-    def __init__(self, prefix, author_id):
+    def __init__(self, prefix, author_id, owner_mode=False):
         super().__init__(timeout=180)
         self.prefix, self.author_id = prefix, author_id
+        self.owner_mode = owner_mode
+        self.categories = get_help_categories(owner_mode)
         self.category, self.page = None, 0
-        self.add_item(HelpCategorySelect(self))
-        self.previous_button = discord.ui.Button(label="Previous", style=discord.ButtonStyle.secondary, emoji="◀️", row=1, disabled=True)
-        self.next_button = discord.ui.Button(label="Next", style=discord.ButtonStyle.secondary, emoji="▶️", row=1)
+        if self.categories:
+            self.add_item(HelpCategorySelect(self))
+        self.previous_button = discord.ui.Button(
+            label="Previous", style=discord.ButtonStyle.secondary,
+            emoji="◀️", row=1, disabled=True
+        )
+        self.next_button = discord.ui.Button(
+            label="Next", style=discord.ButtonStyle.secondary,
+            emoji="▶️", row=1
+        )
         self.previous_button.callback = self.previous
         self.next_button.callback = self.next
         self.pagination_added = False
 
     def refresh_controls(self):
-        count = len(get_help_categories().get(self.category, []))
+        count = len(self.categories.get(self.category, []))
         pages = max(1, (count + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
         if pages > 1 and not self.pagination_added:
             self.add_item(self.previous_button)
@@ -552,13 +617,23 @@ class OnyxHelpView(discord.ui.View):
             self.next_button.disabled = self.page >= pages - 1
 
     async def change_page(self, interaction, delta):
-        pages = max(1, (len(get_help_categories().get(self.category, [])) + COMMANDS_PER_PAGE - 1) // COMMANDS_PER_PAGE)
+        pages = max(
+            1,
+            (len(self.categories.get(self.category, [])) + COMMANDS_PER_PAGE - 1)
+            // COMMANDS_PER_PAGE
+        )
         target = self.page + delta
         if not 0 <= target < pages:
             return await interaction.response.defer()
         self.page = target
         self.refresh_controls()
-        await interaction.response.edit_message(embed=_help_embed(self.prefix, self.category, self.page), view=self)
+        await interaction.response.edit_message(
+            embed=_help_embed(
+                self.prefix, self.category, self.page,
+                self.owner_mode, self.categories
+            ),
+            view=self
+        )
 
     async def previous(self, interaction):
         await self.change_page(interaction, -1)
@@ -568,8 +643,9 @@ class OnyxHelpView(discord.ui.View):
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.author_id:
+            command = " ,owner commands" if self.owner_mode else " ,help"
             await interaction.response.send_message(
-                "This help menu belongs to the person who opened it. Use `,help` to open your own.",
+                f"This help menu belongs to the person who opened it. Use `{command.strip()}` to open your own.",
                 ephemeral=True
             )
             return False
@@ -584,15 +660,23 @@ class GroupCommandSelect(discord.ui.Select):
     def __init__(self, view):
         self.group_view = view
         options = view.get_options()
-        super().__init__(placeholder="Choose a command to view its details...", min_values=1, max_values=1, options=options, row=0)
+        super().__init__(
+            placeholder="Choose a command to view its details...",
+            min_values=1, max_values=1, options=options, row=0
+        )
 
     async def callback(self, interaction):
         selected = bot.get_command(self.values[0])
-        if selected is None or selected.hidden:
-            return await interaction.response.send_message("That command is no longer available.", ephemeral=True)
+        if selected is None or selected.hidden or _is_owner_restricted(selected):
+            return await interaction.response.send_message(
+                "That command is no longer available.", ephemeral=True
+            )
         self.group_view.selected = selected
         await interaction.response.edit_message(
-            embed=_group_help_embed(self.group_view.prefix, self.group_view.group, self.group_view.page, selected),
+            embed=_group_help_embed(
+                self.group_view.prefix, self.group_view.group,
+                self.group_view.page, selected
+            ),
             view=self.group_view
         )
 
@@ -605,15 +689,23 @@ class GroupHelpView(discord.ui.View):
         self.commands = _visible_group_commands(group)
         self.command_select = GroupCommandSelect(self)
         self.add_item(self.command_select)
-        self.previous_button = discord.ui.Button(label="Previous commands", style=discord.ButtonStyle.secondary, emoji="◀️", row=1, disabled=True)
-        self.next_button = discord.ui.Button(label="More commands", style=discord.ButtonStyle.secondary, emoji="▶️", row=1)
+        self.previous_button = discord.ui.Button(
+            label="Previous commands", style=discord.ButtonStyle.secondary,
+            emoji="◀️", row=1, disabled=True
+        )
+        self.next_button = discord.ui.Button(
+            label="More commands", style=discord.ButtonStyle.secondary,
+            emoji="▶️", row=1
+        )
         self.previous_button.callback = self.previous
         self.next_button.callback = self.next
         self.pagination_added = False
         self.refresh_controls()
 
     def get_options(self):
-        subset = self.commands[self.page * GROUP_OPTIONS_PER_PAGE:(self.page + 1) * GROUP_OPTIONS_PER_PAGE]
+        subset = self.commands[
+            self.page * GROUP_OPTIONS_PER_PAGE:(self.page + 1) * GROUP_OPTIONS_PER_PAGE
+        ]
         return [
             discord.SelectOption(
                 label=child.qualified_name[:100],
@@ -621,7 +713,13 @@ class GroupHelpView(discord.ui.View):
                 value=child.qualified_name
             )
             for child in subset
-        ] or [discord.SelectOption(label="No visible subcommands", value=self.group.qualified_name, description="This group has no visible subcommands.")]
+        ] or [
+            discord.SelectOption(
+                label="No visible subcommands",
+                value=self.group.qualified_name,
+                description="This group has no visible subcommands."
+            )
+        ]
 
     def refresh_controls(self):
         pages = max(1, (len(self.commands) + GROUP_OPTIONS_PER_PAGE - 1) // GROUP_OPTIONS_PER_PAGE)
@@ -647,7 +745,9 @@ class GroupHelpView(discord.ui.View):
         self.command_select = GroupCommandSelect(self)
         self.add_item(self.command_select)
         self.refresh_controls()
-        await interaction.response.edit_message(embed=_group_help_embed(self.prefix, self.group, self.page), view=self)
+        await interaction.response.edit_message(
+            embed=_group_help_embed(self.prefix, self.group, self.page), view=self
+        )
 
     async def previous(self, interaction):
         await self.change_page(interaction, -1)
@@ -680,90 +780,53 @@ async def _send_help(ctx, command_query=None):
                     command = bot.get_command(path)
                     if command is not None:
                         break
-        if command is None or command.hidden:
-            return await ctx.send(f"I couldn't find `{command_query}`. Use `{prefix}help` to browse commands.")
+        if command is None or command.hidden or _is_owner_restricted(command):
+            return await ctx.send(
+                f"I couldn't find `{command_query}`. Use `{prefix}help` to browse public commands."
+            )
         if isinstance(command, commands.Group) and _visible_group_commands(command):
             return await ctx.send(
                 embed=_group_help_embed(prefix, command),
                 view=GroupHelpView(prefix, ctx.author.id, command)
             )
         return await ctx.send(embed=_command_detail_embed(prefix, command))
-    await ctx.send(embed=_help_embed(prefix), view=OnyxHelpView(prefix, ctx.author.id))
+
+    categories = get_help_categories(False)
+    await ctx.send(
+        embed=_help_embed(prefix, categories=categories),
+        view=OnyxHelpView(prefix, ctx.author.id, owner_mode=False)
+    )
 
 
-# =========================================================
-# OWNER-ONLY CATEGORIZED COMMAND DIRECTORY
-# =========================================================
-
-def _is_owner_restricted(command):
-    return any("is_owner" in getattr(check, "__qualname__", "") for check in getattr(command, "checks", []))
-
-
-def _owner_category(command):
-    module = command.cog.__class__.__module__.split(".")[-1] if command.cog else "core"
-    labels = {
-        "reports": "Reports", "moderation": "Moderation",
-        "moderation_plus": "Moderation Extras", "automod": "AutoMod & Filters",
-        "security": "Security & Protection", "protection": "Anti-Raid Protection",
-        "backup": "Backups", "logging": "Logging", "levels": "Levels & Engagement",
-        "roles": "Roles", "member_tools": "Member Tools", "server_setup": "Server Setup",
-        "server_tools": "Server Tools", "tickets": "Tickets",
-        "channel_manager": "Channel Management", "utility": "Utilities",
-        "developers": "Administration", "presence": "Administration",
-        "shh": "Administration", "stress_test": "Administration",
-        "core": "Core / Owner Tools",
-    }
-    return labels.get(module, module.replace("_", " ").title())
-
-
-@bot.command(name="ownerhelp", aliases=["ownercommands", "hiddencommands"], hidden=True)
+@bot.group(
+    name="owner",
+    aliases=["ownerhelp", "ownercommands", "hiddencommands"],
+    invoke_without_command=True,
+    hidden=True
+)
 @commands.is_owner()
-async def owner_help(ctx):
-    """Show hidden and owner-restricted commands, organized by category."""
-    selected = []
-    for command in bot.walk_commands():
-        if (
-            command.hidden
-            or _is_owner_restricted(command)
-            or command.qualified_name in {"setupreport", "reload"}
-        ):
-            selected.append(command)
-
-    if not selected:
+async def owner_directory(ctx):
+    """Open the owner-only command directory."""
+    categories = get_help_categories(True)
+    if not categories:
         return await ctx.send("No hidden or owner-restricted commands are currently loaded.")
+    await ctx.send(
+        embed=_help_embed(ctx.prefix, owner_mode=True, categories=categories),
+        view=OnyxHelpView(ctx.prefix, ctx.author.id, owner_mode=True)
+    )
 
-    categories = {}
-    for command in selected:
-        categories.setdefault(_owner_category(command), []).append(command)
 
-    blocks, current, current_length = [], [], 0
-    for category in sorted(categories, key=str.casefold):
-        commands_in_category = sorted(categories[category], key=lambda c: c.qualified_name.casefold())
-        lines = [f"**{category}**"]
-        for command in commands_in_category:
-            usage = _command_usage(ctx.prefix, command)
-            description = command.help or command.brief or "No description available."
-            lines.append(f"`{usage}`\n{description[:180]}")
-        block = "\n".join(lines)
-        if current and current_length + len(block) + 3 > 3800:
-            blocks.append("\n\n".join(current))
-            current, current_length = [], 0
-        current.append(block)
-        current_length += len(block) + 3
-    if current:
-        blocks.append("\n\n".join(current))
-
-    for index, page in enumerate(blocks, start=1):
-        embed = discord.Embed(
-            title="ONYX • Owner Command Directory",
-            description=page,
-            color=discord.Color.from_rgb(44, 38, 67)
-        )
-        embed.set_footer(text=(
-            f"Bot owner only • {len(selected)} commands across "
-            f"{len(categories)} categories • Page {index}/{len(blocks)}"
-        ))
-        await ctx.send(embed=embed)
+@owner_directory.command(name="commands")
+@commands.is_owner()
+async def owner_commands(ctx):
+    """Browse all hidden and owner-restricted commands."""
+    categories = get_help_categories(True)
+    if not categories:
+        return await ctx.send("No hidden or owner-restricted commands are currently loaded.")
+    await ctx.send(
+        embed=_help_embed(ctx.prefix, owner_mode=True, categories=categories),
+        view=OnyxHelpView(ctx.prefix, ctx.author.id, owner_mode=True)
+    )
 
 
 @bot.command(name="help")
