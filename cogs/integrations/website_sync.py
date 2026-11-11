@@ -3,7 +3,7 @@ import json
 import logging
 import re
 
-from discord.ext import import commands
+from discord.ext import commands
 
 log = logging.getLogger("bot.website_sync")
 
