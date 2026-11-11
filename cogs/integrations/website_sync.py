@@ -1,36 +1,10 @@
+
 import json
 import logging
 
 from discord.ext import commands
 
 log = logging.getLogger("bot.website_sync")
-
-
-# Kept as a fallback for cogs that are not inside one of the main folders.
-COG_LABELS = {
-    "automod": "AutoMod",
-    "channel_manager": "Channel Management",
-    "custom": "Custom Commands & Embeds",
-    "engagement": "Engagement",
-    "lastfm": "Last.fm",
-    "levels": "Levels",
-    "logging": "Logging",
-    "member_tools": "Member Tools",
-    "moderation": "Moderation",
-    "moderation_plus": "Moderation Extras",
-    "prefix": "Prefix",
-    "protection": "Anti-Raid Protection",
-    "roles": "Roles",
-    "security": "Security",
-    "server_setup": "Server Setup",
-    "server_tools": "Server Tools",
-    "shh": "Special Role",
-    "tickets": "Tickets",
-    "utility": "Utility",
-    "voicemaster": "Voice Master",
-    "welcome": "Welcome & Goodbye",
-    "reports": "Reports",
-}
 
 
 HELP_FOLDER_LABELS = {
@@ -79,7 +53,6 @@ class WebsiteSync(commands.Cog):
             )
         """)
 
-        # Public website statistics. One row stores the latest totals.
         await self.bot.db.execute("""
             CREATE TABLE IF NOT EXISTS onyx_bot_stats (
                 id INTEGER PRIMARY KEY,
@@ -92,7 +65,6 @@ class WebsiteSync(commands.Cog):
         log.info("Website synchronization tables are ready.")
 
     async def sync_guilds(self):
-        """Refresh the database with the bot's current server list."""
         guilds = list(self.bot.guilds)
 
         await self.bot.db.execute("DELETE FROM onyx_bot_guilds")
@@ -115,7 +87,6 @@ class WebsiteSync(commands.Cog):
         log.info("Website server list synchronized: %s servers.", len(guilds))
 
     async def sync_stats(self):
-        """Publish server count and combined member count to the website."""
         guilds = list(self.bot.guilds)
         guild_count = len(guilds)
         member_count = sum(int(guild.member_count or 0) for guild in guilds)
@@ -153,6 +124,7 @@ class WebsiteSync(commands.Cog):
                 module_parts = command.cog.__class__.__module__.split(".")
                 module = module_parts[-1]
                 folder = module_parts[-2] if len(module_parts) >= 2 else "core"
+
                 category = HELP_MODULE_OVERRIDES.get(
                     module,
                     HELP_FOLDER_LABELS.get(folder, "Other")
@@ -162,6 +134,7 @@ class WebsiteSync(commands.Cog):
                 category = "Utilities & Integrations"
 
             usage = f",{command.qualified_name}"
+
             if command.signature:
                 usage += f" {command.signature}"
 
@@ -174,7 +147,10 @@ class WebsiteSync(commands.Cog):
                     or command.brief
                     or "No description available."
                 ),
-                "aliases": json.dumps(list(command.aliases), ensure_ascii=False),
+                "aliases": json.dumps(
+                    list(command.aliases),
+                    ensure_ascii=False
+                ),
                 "cog_name": module,
             })
 
@@ -184,19 +160,26 @@ class WebsiteSync(commands.Cog):
                 item["command_name"].casefold()
             )
         )
+
         return catalog
 
     async def sync_commands(self):
         """Replace the website catalog with currently loaded public commands."""
         catalog = self.build_command_catalog()
+
         await self.bot.db.execute("DELETE FROM onyx_command_catalog")
 
         for command in catalog:
             await self.bot.db.execute(
                 """
                 INSERT INTO onyx_command_catalog (
-                    command_name, usage, category, description,
-                    aliases, cog_name, updated_at
+                    command_name,
+                    usage,
+                    category,
+                    description,
+                    aliases,
+                    cog_name,
+                    updated_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(command_name)
@@ -233,6 +216,21 @@ class WebsiteSync(commands.Cog):
         await self.sync_all()
 
     @commands.Cog.listener()
+    async def on_command_completion(self, ctx):
+        """Refresh the website whenever the owner reloads cogs."""
+        if not ctx.command:
+            return
+
+        if ctx.command.qualified_name != "reload":
+            return
+
+        try:
+            await self.sync_commands()
+            log.info("Website command catalog refreshed after cog reload.")
+        except Exception:
+            log.exception("Website command catalog refresh failed after cog reload.")
+
+    @commands.Cog.listener()
     async def on_guild_join(self, guild):
         await self.bot.db.execute(
             """
@@ -247,8 +245,14 @@ class WebsiteSync(commands.Cog):
             """,
             (guild.id, guild.name)
         )
+
         await self.sync_stats()
-        log.info("Added server to website tracking: %s (%s)", guild.name, guild.id)
+
+        log.info(
+            "Added server to website tracking: %s (%s)",
+            guild.name,
+            guild.id
+        )
 
     @commands.Cog.listener()
     async def on_guild_remove(self, guild):
@@ -256,8 +260,14 @@ class WebsiteSync(commands.Cog):
             "DELETE FROM onyx_bot_guilds WHERE guild_id = ?",
             (guild.id,)
         )
+
         await self.sync_stats()
-        log.info("Removed server from website tracking: %s (%s)", guild.name, guild.id)
+
+        log.info(
+            "Removed server from website tracking: %s (%s)",
+            guild.name,
+            guild.id
+        )
 
     @commands.Cog.listener()
     async def on_member_join(self, member):
