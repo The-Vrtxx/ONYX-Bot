@@ -63,11 +63,84 @@ CREATE TABLE IF NOT EXISTS onyx_jails (
  moderator_id BIGINT NOT NULL, reason TEXT NOT NULL, expires_at TIMESTAMP,
  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (guild_id,user_id)
 );
+
+-- Permanent catalog records. category/item_id retain compatibility with existing inventory IDs.
+CREATE TABLE IF NOT EXISTS onyx_asset_catalog (
+ asset_id TEXT PRIMARY KEY,
+ category TEXT NOT NULL,
+ item_id TEXT NOT NULL,
+ display_name TEXT NOT NULL,
+ description TEXT NOT NULL DEFAULT '',
+ price_tokens INTEGER NOT NULL DEFAULT 0,
+ rarity TEXT NOT NULL DEFAULT 'Common',
+ image_url TEXT,
+ is_active INTEGER NOT NULL DEFAULT 1,
+ is_shop_item INTEGER NOT NULL DEFAULT 1,
+ sort_order INTEGER NOT NULL DEFAULT 0,
+ version INTEGER NOT NULL DEFAULT 1,
+ metadata_json TEXT NOT NULL DEFAULT '{}',
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE (category, item_id),
+ CHECK (price_tokens >= 0),
+ CHECK (version >= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_onyx_asset_catalog_category_active
+ ON onyx_asset_catalog(category, is_active, sort_order);
+
+-- Revision history supports auditing and future rollback of asset changes.
+CREATE TABLE IF NOT EXISTS onyx_asset_versions (
+ id BIGSERIAL PRIMARY KEY,
+ asset_id TEXT NOT NULL,
+ version INTEGER NOT NULL,
+ display_name TEXT NOT NULL,
+ description TEXT NOT NULL DEFAULT '',
+ price_tokens INTEGER NOT NULL DEFAULT 0,
+ rarity TEXT NOT NULL DEFAULT 'Common',
+ image_url TEXT,
+ is_active INTEGER NOT NULL DEFAULT 1,
+ is_shop_item INTEGER NOT NULL DEFAULT 1,
+ metadata_json TEXT NOT NULL DEFAULT '{}',
+ changed_by BIGINT,
+ change_note TEXT NOT NULL DEFAULT '',
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE (asset_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_onyx_asset_versions_asset
+ ON onyx_asset_versions(asset_id, version DESC);
 """
+
+SQLITE_ASSET_SCHEMA = """
+CREATE TABLE IF NOT EXISTS onyx_asset_catalog (
+ asset_id TEXT PRIMARY KEY, category TEXT NOT NULL, item_id TEXT NOT NULL,
+ display_name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+ price_tokens INTEGER NOT NULL DEFAULT 0, rarity TEXT NOT NULL DEFAULT 'Common',
+ image_url TEXT, is_active INTEGER NOT NULL DEFAULT 1, is_shop_item INTEGER NOT NULL DEFAULT 1,
+ sort_order INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
+ metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE (category, item_id),
+ CHECK (price_tokens >= 0), CHECK (version >= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_onyx_asset_catalog_category_active
+ ON onyx_asset_catalog(category, is_active, sort_order);
+CREATE TABLE IF NOT EXISTS onyx_asset_versions (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT NOT NULL, version INTEGER NOT NULL,
+ display_name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+ price_tokens INTEGER NOT NULL DEFAULT 0, rarity TEXT NOT NULL DEFAULT 'Common',
+ image_url TEXT, is_active INTEGER NOT NULL DEFAULT 1, is_shop_item INTEGER NOT NULL DEFAULT 1,
+ metadata_json TEXT NOT NULL DEFAULT '{}', changed_by INTEGER,
+ change_note TEXT NOT NULL DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE (asset_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_onyx_asset_versions_asset
+ ON onyx_asset_versions(asset_id, version DESC);
+"""
+
 
 class ExecuteResult:
     def __init__(self, lastrowid=None):
         self.lastrowid = lastrowid
+
 
 class Database:
     def __init__(self, path: str = "data/bot.sqlite3", database_url: str | None = None):
@@ -108,7 +181,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS onyx_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL UNIQUE, opener_id BIGINT NOT NULL, claimed_by BIGINT, status TEXT NOT NULL DEFAULT 'open', created_at TEXT DEFAULT CURRENT_TIMESTAMP, closed_at TEXT);
                 CREATE TABLE IF NOT EXISTS onyx_ticket_panels (guild_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS onyx_mod_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, moderator_id INTEGER NOT NULL, note TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-                CREATE TABLE IF NOT EXISTS onyx_security_settings (guild_id INTEGER PRIMARY KEY, alert_channel_id INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
+                CREATE TABLE IF NOT EXISTS onyx_security_settings (guild_id INTEGER PRIMARY KEY, alert_channel_id BIGINT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
                 CREATE TABLE IF NOT EXISTS onyx_temp_voice_rooms (guild_id INTEGER NOT NULL, channel_id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS onyx_antinuke_settings (guild_id INTEGER PRIMARY KEY, threshold INTEGER NOT NULL DEFAULT 3, window_seconds INTEGER NOT NULL DEFAULT 10, punishment TEXT NOT NULL DEFAULT 'none', log_channel_id INTEGER, jail_role_id INTEGER, enabled INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS onyx_antinuke_whitelist (guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY (guild_id,user_id));
@@ -117,6 +190,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS onyx_jail_settings (guild_id INTEGER PRIMARY KEY, role_id INTEGER NOT NULL, category_id INTEGER NOT NULL, channel_id INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS onyx_jails (guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, saved_role_ids TEXT NOT NULL DEFAULT '[]', moderator_id INTEGER NOT NULL, reason TEXT NOT NULL, expires_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (guild_id,user_id));
             """)
+            await self.conn.executescript(SQLITE_ASSET_SCHEMA)
             await self.conn.commit()
 
     @staticmethod
