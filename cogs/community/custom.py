@@ -278,37 +278,38 @@ class EmbedCreatorView(discord.ui.View):
 
 
 class Custom(commands.Cog):
+    """Custom text commands and the single interactive embed builder."""
+
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.group(name="embed", invoke_without_command=True, help="Create an embed or open the visual embed creator.")
-    @commands.guild_only()
-    @commands.has_permissions(manage_messages=True)
-    async def embed(self, ctx, title: str = None, *, description: str = None):
-        # Preserve the original one-command embed format.
-        if not title or not description:
-            return await ctx.send(
-                f"Use `{ctx.prefix}embed create` for the dropdown builder, or "
-                f"`{ctx.prefix}embed <title> <description>` for a quick embed."
-            )
-        description = description.lstrip()
-        if description.startswith("|"):
-            description = description[1:].lstrip()
-        if len(title) > 256 or len(description) > 4000:
-            return await ctx.send("Title or description is too long.")
-        embed = discord.Embed(title=title, description=description, color=EMBED_COLOR)
-        await ctx.send(embed=embed)
-
-    @embed.command(name="create", help="Open the interactive dropdown embed creator.")
-    @commands.has_permissions(manage_messages=True)
-    async def embed_create(self, ctx):
+    async def open_embed_creator(self, ctx):
+        """Open the dropdown-based embed builder in the current channel."""
         view = EmbedCreatorView(ctx.author.id, ctx.channel)
         await ctx.send(embed=view.make_panel_embed(), view=view)
+
+    @commands.group(
+        name="embed",
+        invoke_without_command=True,
+        help="Open the interactive dropdown menu to create a custom embed."
+    )
+    @commands.guild_only()
+    @commands.has_permissions(manage_messages=True)
+    async def embed(self, ctx):
+        await self.open_embed_creator(ctx)
+
+    @embed.command(
+        name="create",
+        help="Open the interactive dropdown menu to build and send an embed."
+    )
+    @commands.has_permissions(manage_messages=True)
+    async def embed_create(self, ctx):
+        await self.open_embed_creator(ctx)
 
     @commands.command(
         name="copyembed",
         aliases=["embedcopy"],
-        help="Copy an embed from a message link or a replied-to message."
+        help="Load an embed from a message link or reply into the dropdown creator."
     )
     @commands.guild_only()
     @commands.has_permissions(manage_messages=True)
@@ -362,12 +363,12 @@ class Custom(commands.Cog):
 
         view = EmbedCreatorView(ctx.author.id, ctx.channel, initial_data=copied_data)
         await ctx.send(
-            "Embed copied into the visual creator. You can edit it, preview it, or send it.",
+            "Embed copied into the dropdown creator. Use the menu to edit it, then preview or send it.",
             embed=view.make_panel_embed(),
             view=view,
         )
 
-    @commands.command(name="custom_add", help="Create a custom text command.")
+    @commands.command(name="custom_add", help="Create or update a custom text command for this server.")
     @commands.has_permissions(manage_guild=True)
     async def add(self, ctx, name: str, *, response: str):
         name = name.lower()
@@ -382,7 +383,7 @@ class Custom(commands.Cog):
         )
         await ctx.send(f"Custom command `{ctx.prefix}{name}` saved.")
 
-    @commands.command(name="custom_run", help="Run a server custom command.")
+    @commands.command(name="custom_run", help="Run a custom text command saved by this server.")
     async def run_custom(self, ctx, name: str):
         row = await self.bot.db.fetchone(
             "SELECT response FROM custom_commands WHERE guild_id=? AND name=?",
@@ -393,54 +394,11 @@ class Custom(commands.Cog):
         safe = row["response"].replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
         await ctx.send(safe, allowed_mentions=discord.AllowedMentions.none())
 
-    @commands.command(name="custom_remove", help="Delete a server custom command.")
+    @commands.command(name="custom_remove", help="Delete a custom text command from this server.")
     @commands.has_permissions(manage_guild=True)
     async def remove(self, ctx, name: str):
         await self.bot.db.execute(
             "DELETE FROM custom_commands WHERE guild_id=? AND name=?",
-            (ctx.guild.id, name.lower())
-        )
-        await ctx.send(f"Deleted `{name}` if it existed.")
-
-    @commands.command(name="embed_template_save", help="Save an embed template for this server.")
-    @commands.has_permissions(manage_messages=True)
-    async def template_save(self, ctx, name: str, title: str, *, description: str):
-        name = name.lower()
-        if not re.fullmatch(r"[a-z0-9_-]{2,32}", name):
-            return await ctx.send("Use 2–32 letters, numbers, underscores or hyphens.")
-        if len(title) > 256 or len(description) > 4000:
-            return await ctx.send("Title or description is too long.")
-        await self.bot.db.execute(
-            "INSERT INTO embed_templates VALUES (?,?,?,?,?) "
-            "ON CONFLICT(guild_id,name) DO UPDATE SET "
-            "title=excluded.title,description=excluded.description,color=excluded.color",
-            (ctx.guild.id, name, title, description, "2C2643")
-        )
-        await ctx.send(f"Saved embed template `{name}`.")
-
-    @commands.command(name="embed_template_send", help="Send a saved embed template.")
-    @commands.has_permissions(manage_messages=True)
-    async def template_send(self, ctx, name: str, channel: discord.TextChannel = None):
-        row = await self.bot.db.fetchone(
-            "SELECT title,description,color FROM embed_templates WHERE guild_id=? AND name=?",
-            (ctx.guild.id, name.lower())
-        )
-        if not row:
-            return await ctx.send("Template not found.")
-        target = channel or ctx.channel
-        embed = discord.Embed(
-            title=row["title"],
-            description=row["description"],
-            color=int(row["color"], 16)
-        )
-        await target.send(embed=embed)
-        await ctx.send(f"Sent `{name}` to {target.mention}.")
-
-    @commands.command(name="embed_template_delete", help="Delete a saved embed template.")
-    @commands.has_permissions(manage_messages=True)
-    async def template_delete(self, ctx, name: str):
-        await self.bot.db.execute(
-            "DELETE FROM embed_templates WHERE guild_id=? AND name=?",
             (ctx.guild.id, name.lower())
         )
         await ctx.send(f"Deleted `{name}` if it existed.")
