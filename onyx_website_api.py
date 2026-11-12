@@ -1,3 +1,4 @@
+
 """
 ONYX Website API
 Separate Render web service sharing the bot's PostgreSQL database.
@@ -148,13 +149,19 @@ async def cors_and_security(request, handler):
     origin = request.headers.get("Origin")
     if origin and origin != WEBSITE_ORIGIN:
         return json_error("Origin not allowed.", 403)
+
     response = web.Response(status=204) if request.method == "OPTIONS" else await handler(request)
+
     if origin == WEBSITE_ORIGIN:
         response.headers["Access-Control-Allow-Origin"] = WEBSITE_ORIGIN
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+
+        # PATCH is required by the Owner Asset Library when editing assets.
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, OPTIONS"
+
         response.headers["Vary"] = "Origin"
+
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
