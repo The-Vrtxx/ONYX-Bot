@@ -21,6 +21,7 @@ from website_commands import register_routes as register_command_routes
 from owner_portal_api import register_owner_routes
 from server_owner_api import register_server_owner_routes, ensure_server_owner_tables
 from server_management_api import register_management_routes, ensure_management_tables
+from profile_card_api import register_profile_card_route
 
 
 # Legacy seed catalog. These values are inserted only when an asset does not
@@ -689,6 +690,9 @@ def create_app():
     app.router.add_post("/api/shop/buy", buy_item)
     app.router.add_post("/api/equip", equip_item)
     app.router.add_get("/api/inventory", inventory)
+
+    # Signed-in member's progression and equipped cosmetics for card previews.
+    register_profile_card_route(app, require_user)
 
     register_command_routes(app)
     return app
