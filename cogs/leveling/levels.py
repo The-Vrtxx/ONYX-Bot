@@ -687,14 +687,17 @@ class Levels(commands.Cog):
             rewards = await self.give_rewards(message.author, reward_level)
             await self.announce_level_up(message, settings, new, rewards)
 
+    
     @commands.command(name="rank", aliases=["level"], help="View your ONYX profile card.")
     @commands.guild_only()
     async def rank(self, ctx, member: discord.Member = None):
         member = member or ctx.author
+
         row = await self.profile(member.id)
         unlocked = self.unlocked_titles(row)
         tokens = await self.prestige_tokens(member.id)
         cosmetics = await self.equipped_cosmetics(member.id)
+
         card = render_onyx_profile_card(
             display_name=member.display_name,
             row=row,
@@ -702,11 +705,13 @@ class Levels(commands.Cog):
             tokens=tokens,
             cosmetics=cosmetics,
         )
+
         filename = f"onyx-profile-{member.id}.png"
+
         await ctx.send(
-            file=discord.File(card, filename=filename),
-            content=f"**{discord.utils.escape_markdown(member.display_name)} • ONYX Profile**"
+            file=discord.File(card, filename=filename)
         )
+
 
     @commands.command(name="leaderboard", aliases=["levels_top"])
     @commands.guild_only()
