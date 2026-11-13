@@ -1,13 +1,15 @@
+
 """Database layer for ONYX.
 
-PostgreSQL is recommended for hosted multi-server deployments.
+PostgreSQL uses a connection pool for reliable hosted deployments.
 SQLite remains available for local development.
 """
+
 import os
-import asyncio
 from pathlib import Path
 
 import aiosqlite
+
 
 POSTGRES_SCHEMA = r"""
 CREATE TABLE IF NOT EXISTS guild_settings (
@@ -64,7 +66,6 @@ CREATE TABLE IF NOT EXISTS onyx_jails (
  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (guild_id,user_id)
 );
 
--- Permanent catalog records. category/item_id retain compatibility with existing inventory IDs.
 CREATE TABLE IF NOT EXISTS onyx_asset_catalog (
  asset_id TEXT PRIMARY KEY,
  category TEXT NOT NULL,
@@ -88,7 +89,6 @@ CREATE TABLE IF NOT EXISTS onyx_asset_catalog (
 CREATE INDEX IF NOT EXISTS idx_onyx_asset_catalog_category_active
  ON onyx_asset_catalog(category, is_active, sort_order);
 
--- Revision history supports auditing and future rollback of asset changes.
 CREATE TABLE IF NOT EXISTS onyx_asset_versions (
  id BIGSERIAL PRIMARY KEY,
  asset_id TEXT NOT NULL,
@@ -110,6 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_onyx_asset_versions_asset
  ON onyx_asset_versions(asset_id, version DESC);
 """
 
+
 SQLITE_ASSET_SCHEMA = """
 CREATE TABLE IF NOT EXISTS onyx_asset_catalog (
  asset_id TEXT PRIMARY KEY, category TEXT NOT NULL, item_id TEXT NOT NULL,
@@ -128,8 +129,9 @@ CREATE TABLE IF NOT EXISTS onyx_asset_versions (
  display_name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
  price_tokens INTEGER NOT NULL DEFAULT 0, rarity TEXT NOT NULL DEFAULT 'Common',
  image_url TEXT, is_active INTEGER NOT NULL DEFAULT 1, is_shop_item INTEGER NOT NULL DEFAULT 1,
- metadata_json TEXT NOT NULL DEFAULT '{}', changed_by INTEGER,
- change_note TEXT NOT NULL DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+ sort_order INTEGER NOT NULL DEFAULT 0, metadata_json TEXT NOT NULL DEFAULT '{}',
+ changed_by INTEGER, change_note TEXT NOT NULL DEFAULT '',
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP,
  UNIQUE (asset_id, version)
 );
 CREATE INDEX IF NOT EXISTS idx_onyx_asset_versions_asset
@@ -147,16 +149,24 @@ class Database:
         self.path = path
         self.database_url = database_url or os.getenv("DATABASE_URL")
         self.conn = None
+        self.pool = None
         self.backend = "postgres" if self.database_url else "sqlite"
-        self._connection_lock = asyncio.Lock()
 
     async def connect(self):
         if self.backend == "postgres":
             import asyncpg
+
             url = self.database_url
             if url.startswith("postgres://"):
                 url = "postgresql://" + url[len("postgres://"):]
-            self.conn = await asyncpg.connect(url, command_timeout=60)
+
+            self.pool = await asyncpg.create_pool(
+                dsn=url,
+                min_size=1,
+                max_size=10,
+                command_timeout=60,
+                max_inactive_connection_lifetime=300,
+            )
         else:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
             self.conn = await aiosqlite.connect(self.path)
@@ -166,14 +176,26 @@ class Database:
 
     async def initialize(self):
         if self.backend == "postgres":
-            await self.conn.execute(POSTGRES_SCHEMA)
-            await self.conn.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS prefix TEXT NOT NULL DEFAULT ','")
+            async with self.pool.acquire() as conn:
+                await conn.execute(POSTGRES_SCHEMA)
+                await conn.execute(
+                    "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS prefix TEXT NOT NULL DEFAULT ','"
+                )
         else:
             old_schema = Path(__file__).with_name("database_v4_schema.sql")
-            await self.conn.executescript(old_schema.read_text(encoding="utf-8"))
-            columns = await (await self.conn.execute("PRAGMA table_info(guild_settings)")).fetchall()
+            await self.conn.executescript(
+                old_schema.read_text(encoding="utf-8")
+            )
+
+            columns = await (
+                await self.conn.execute("PRAGMA table_info(guild_settings)")
+            ).fetchall()
+
             if not any(column["name"] == "prefix" for column in columns):
-                await self.conn.execute("ALTER TABLE guild_settings ADD COLUMN prefix TEXT NOT NULL DEFAULT ','")
+                await self.conn.execute(
+                    "ALTER TABLE guild_settings ADD COLUMN prefix TEXT NOT NULL DEFAULT ','"
+                )
+
             await self.conn.executescript("""
                 CREATE TABLE IF NOT EXISTS onyx_autoresponses (guild_id INTEGER NOT NULL, trigger TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY (guild_id, trigger));
                 CREATE TABLE IF NOT EXISTS onyx_antiraid (guild_id INTEGER PRIMARY KEY, join_count INTEGER NOT NULL, window_seconds INTEGER NOT NULL, alert_channel_id INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
@@ -190,6 +212,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS onyx_jail_settings (guild_id INTEGER PRIMARY KEY, role_id INTEGER NOT NULL, category_id INTEGER NOT NULL, channel_id INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS onyx_jails (guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, saved_role_ids TEXT NOT NULL DEFAULT '[]', moderator_id INTEGER NOT NULL, reason TEXT NOT NULL, expires_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (guild_id,user_id));
             """)
+
             await self.conn.executescript(SQLITE_ASSET_SCHEMA)
             await self.conn.commit()
 
@@ -197,50 +220,64 @@ class Database:
     def _postgres_query(query: str) -> str:
         index = 0
         out = []
+
         for char in query:
             if char == "?":
                 index += 1
                 out.append(f"${index}")
             else:
                 out.append(char)
+
         return "".join(out)
 
     async def execute(self, query, params=()):
         if self.backend == "postgres":
             q = self._postgres_query(query)
-            async with self._connection_lock:
+
+            async with self.pool.acquire() as conn:
                 if query.lstrip().upper().startswith("INSERT INTO MOD_CASES"):
                     q = q.rstrip().rstrip(";") + " RETURNING id"
-                    new_id = await self.conn.fetchval(q, *params)
+                    new_id = await conn.fetchval(q, *params)
                     return ExecuteResult(lastrowid=new_id)
+
                 if query.lstrip().upper().startswith("INSERT INTO ONYX_ANTINUKE_EVENTS"):
                     q = q.rstrip().rstrip(";") + " RETURNING id"
-                    new_id = await self.conn.fetchval(q, *params)
+                    new_id = await conn.fetchval(q, *params)
                     return ExecuteResult(lastrowid=new_id)
-                await self.conn.execute(q, *params)
+
+                await conn.execute(q, *params)
+
             return ExecuteResult()
+
         cursor = await self.conn.execute(query, params)
         await self.conn.commit()
         return cursor
 
     async def fetchone(self, query, params=()):
         if self.backend == "postgres":
-            async with self._connection_lock:
-                return await self.conn.fetchrow(self._postgres_query(query), *params)
+            async with self.pool.acquire() as conn:
+                return await conn.fetchrow(
+                    self._postgres_query(query), *params
+                )
+
         cursor = await self.conn.execute(query, params)
         return await cursor.fetchone()
 
     async def fetchall(self, query, params=()):
         if self.backend == "postgres":
-            async with self._connection_lock:
-                return await self.conn.fetch(self._postgres_query(query), *params)
+            async with self.pool.acquire() as conn:
+                return await conn.fetch(
+                    self._postgres_query(query), *params
+                )
+
         cursor = await self.conn.execute(query, params)
         return await cursor.fetchall()
 
     async def close(self):
-        if self.conn:
-            if self.backend == "postgres":
-                async with self._connection_lock:
-                    await self.conn.close()
-            else:
-                await self.conn.close()
+        if self.backend == "postgres" and self.pool:
+            await self.pool.close()
+            self.pool = None
+
+        elif self.conn:
+            await self.conn.close()
+            self.conn = None
