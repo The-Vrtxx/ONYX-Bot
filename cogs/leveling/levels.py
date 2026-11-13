@@ -8,6 +8,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
+from profile_card_renderer import render_onyx_profile_card as render_shared_profile_card
+
 import discord
 from discord.ext import commands
 
@@ -698,7 +700,7 @@ class Levels(commands.Cog):
         tokens = await self.prestige_tokens(member.id)
         cosmetics = await self.equipped_cosmetics(member.id)
 
-        card = render_onyx_profile_card(
+        card = render_shared_profile_card(
             display_name=member.display_name,
             row=row,
             unlocked_titles=unlocked,
