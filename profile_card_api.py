@@ -1,3 +1,4 @@
+
 """Read-only profile data and shared PNG rendering for the ONYX website."""
 
 from aiohttp import web
@@ -38,7 +39,9 @@ def default_cosmetics():
         "theme_id": "onyx",
         "emblem_id": "default",
         "effect_id": "none",
+        "background_id": "default",
         "title_id": None,
+        "badge_id": "default",
     }
 
 
@@ -56,7 +59,8 @@ async def fetch_profile_card_records(request, user_id):
 
         equipped_row = await conn.fetchrow(
             """
-            SELECT frame_id, theme_id, emblem_id, effect_id, title_id
+            SELECT frame_id, theme_id, emblem_id, effect_id,
+                   background_id, title_id, badge_id
             FROM onyx_profile_equipped
             WHERE user_id=$1
             """,
@@ -65,6 +69,7 @@ async def fetch_profile_card_records(request, user_id):
 
     row = dict(level_row) if level_row else default_profile_row()
     cosmetics = dict(equipped_row) if equipped_row else default_cosmetics()
+
     return row, cosmetics
 
 
@@ -73,15 +78,22 @@ async def profile_card_data(request):
     row, cosmetics = await fetch_profile_card_records(request, user_id)
 
     master_mode = bool(row["master_mode"])
-    active_level = int(row["master_level"] if master_mode else row["level"])
+    active_level = int(
+        row["master_level"] if master_mode else row["level"]
+    )
 
-    title = ""
+    # Progression title remains separate from the cosmetic title slot.
+    progression_title = ""
+
     if master_mode:
         for threshold, label in MASTER_TITLES:
             if int(row["master_level"]) >= threshold:
-                title = label
+                progression_title = label
 
-    get_display_name = request.app.get("profile_card_get_display_name")
+    get_display_name = request.app.get(
+        "profile_card_get_display_name"
+    )
+
     display_name = (
         str(get_display_name(request))
         if get_display_name
@@ -97,7 +109,7 @@ async def profile_card_data(request):
             "masterLevel": int(row["master_level"]),
             "xp": int(row["xp"]),
             "xpNeeded": xp_needed(active_level),
-            "title": title,
+            "title": progression_title,
             "lifetimeXp": int(row["lifetime_xp"]),
         },
         "cosmetics": cosmetics,
@@ -109,7 +121,10 @@ async def profile_card_png(request):
     user_id = request.app["profile_card_require_user"](request)
     row, cosmetics = await fetch_profile_card_records(request, user_id)
 
-    get_display_name = request.app.get("profile_card_get_display_name")
+    get_display_name = request.app.get(
+        "profile_card_get_display_name"
+    )
+
     display_name = (
         str(get_display_name(request))
         if get_display_name
@@ -133,9 +148,15 @@ async def profile_card_png(request):
     )
 
 
-def register_profile_card_route(app, require_user, get_display_name=None):
+def register_profile_card_route(
+    app,
+    require_user,
+    get_display_name=None
+):
     app["profile_card_require_user"] = require_user
+
     if get_display_name:
         app["profile_card_get_display_name"] = get_display_name
+
     app.router.add_get("/api/profile-card", profile_card_data)
     app.router.add_get("/api/profile-card.png", profile_card_png)
