@@ -1,10 +1,13 @@
+
 """Shared ONYX profile-card renderer for Discord and the website."""
 
 from io import BytesIO
 from pathlib import Path
 import json
+import re
 import threading
 import time
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -27,7 +30,6 @@ PRESTIGE_BADGES = {
     "master": "prestige_master.PNG",
 }
 
-# Website Asset Library is the source of truth for prestige artwork.
 PRESTIGE_ASSET_API = "https://api.onyxdiscord.com/api/assets/prestige-emblems"
 PRESTIGE_ASSET_BASE = "https://api.onyxdiscord.com"
 PRESTIGE_CACHE_SECONDS = 60
@@ -36,6 +38,12 @@ _remote_prestige_badges = {}
 _prestige_cache_lock = threading.Lock()
 _prestige_refresh_started = False
 _prestige_last_refresh = 0.0
+
+# General cosmetic asset image cache.
+COSMETIC_ASSET_BASE = "https://api.onyxdiscord.com/api/assets/media/"
+COSMETIC_CACHE_SECONDS = 300
+_cosmetic_asset_cache = {}
+_cosmetic_cache_lock = threading.Lock()
 
 
 def _refresh_remote_prestige_badges():
@@ -143,6 +151,64 @@ def _get_prestige_badge(badge_key):
     return None
 
 
+def _get_cosmetic_asset(category, item_id):
+    """Load an Asset Library image, using a short-lived in-memory cache."""
+    if not item_id:
+        return None
+
+    category = str(category or "").strip().lower()
+    item_id = str(item_id or "").strip().lower()
+
+    if category not in {
+        "background",
+        "emblem",
+        "badge",
+    }:
+        return None
+
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", item_id):
+        return None
+
+    asset_id = f"{category}:{item_id}"
+    now = time.time()
+
+    with _cosmetic_cache_lock:
+        cached = _cosmetic_asset_cache.get(asset_id)
+
+        if cached:
+            cached_time, cached_image = cached
+
+            if now - cached_time < COSMETIC_CACHE_SECONDS:
+                return cached_image.copy() if cached_image else None
+
+    image = None
+
+    try:
+        image_url = COSMETIC_ASSET_BASE + quote(asset_id, safe=":")
+        request = Request(
+            image_url,
+            headers={"User-Agent": "ONYX-Discord-Bot/1.0"}
+        )
+
+        with urlopen(request, timeout=3) as response:
+            image_data = response.read()
+
+        with Image.open(BytesIO(image_data)) as source:
+            source.load()
+            image = source.convert("RGBA").copy()
+
+    except Exception:
+        image = None
+
+    with _cosmetic_cache_lock:
+        _cosmetic_asset_cache[asset_id] = (
+            now,
+            image.copy() if image else None,
+        )
+
+    return image.copy() if image else None
+
+
 BASE_XP = 100
 LINEAR_XP = 50
 QUADRATIC_XP = 5
@@ -213,6 +279,50 @@ def _fit_text(draw, text, font, max_width):
     return text
 
 
+def _draw_background_asset(image, background):
+    """Draw an equipped background image beneath the card content."""
+    if background is None:
+        return image
+
+    try:
+        background = background.convert("RGBA")
+        background = background.resize(
+            image.size,
+            Image.Resampling.LANCZOS,
+        )
+
+        # Keep the background visible without sacrificing text readability.
+        overlay = Image.new(
+            "RGBA",
+            image.size,
+            (5, 10, 18, 155),
+        )
+
+        background = Image.alpha_composite(background, overlay)
+        return Image.alpha_composite(image.convert("RGBA"), background)
+
+    except Exception:
+        return image.convert("RGBA")
+
+
+def _draw_small_cosmetic(image, asset, position, max_size):
+    """Draw a transparent cosmetic emblem or badge without distortion."""
+    if asset is None:
+        return image
+
+    try:
+        asset = asset.copy().convert("RGBA")
+        asset.thumbnail(max_size, Image.Resampling.LANCZOS)
+
+        image = image.convert("RGBA")
+        image.alpha_composite(asset, position)
+
+    except Exception:
+        pass
+
+    return image
+
+
 def render_onyx_profile_card(
     display_name: str,
     row,
@@ -232,6 +342,11 @@ def render_onyx_profile_card(
     theme_key = str(cosmetics.get("theme_id") or "onyx").lower()
     frame_key = str(cosmetics.get("frame_id") or "default").lower()
     effect_key = str(cosmetics.get("effect_id") or "none").lower()
+
+    background_id = cosmetics.get("background_id")
+    cosmetic_emblem_id = cosmetics.get("emblem_id")
+    cosmetic_badge_id = cosmetics.get("badge_id")
+    cosmetic_title_id = cosmetics.get("title_id")
 
     theme = CARD_THEMES.get(theme_key, CARD_THEMES["onyx"])
     frame_color = CARD_FRAMES.get(frame_key, CARD_FRAMES["default"])
@@ -254,6 +369,13 @@ def render_onyx_profile_card(
         for y in range(height):
             pixels[x, y] = color
 
+    # Optional Asset Library background.
+    background_asset = _get_cosmetic_asset(
+        "background",
+        background_id,
+    )
+
+    image = _draw_background_asset(image, background_asset)
     draw = ImageDraw.Draw(image)
 
     draw.ellipse(
@@ -407,6 +529,7 @@ def render_onyx_profile_card(
     font_name = _card_font(43, True)
     font_stage = _card_font(25, True)
     font_label = _card_font(16, True)
+    font_cosmetic_title = _card_font(19, True)
 
     # Branding and member name.
     draw.text(
@@ -436,6 +559,18 @@ def render_onyx_profile_card(
         fill=(245, 249, 252),
     )
 
+    # Cosmetic title is separate from the progression title.
+    if cosmetic_title_id:
+        cosmetic_title = str(cosmetic_title_id).replace("_", " ").replace("-", " ")
+        cosmetic_title = cosmetic_title.title()
+
+        draw.text(
+            (62, 174),
+            _fit_text(draw, cosmetic_title, font_cosmetic_title, 600),
+            font=font_cosmetic_title,
+            fill=(185, 200, 215),
+        )
+
     # Determine progression stage and current prestige badge.
     if row["master_mode"]:
         stage = (
@@ -460,7 +595,7 @@ def render_onyx_profile_card(
         badge_key = prestige
 
     draw.text(
-        (60, 190),
+        (60, 215),
         stage,
         font=font_stage,
         fill=accent,
@@ -487,6 +622,36 @@ def render_onyx_profile_card(
         )
 
         image = image_rgba.convert("RGB")
+        draw = ImageDraw.Draw(image)
+
+    # Cosmetic emblem is displayed separately from the prestige insignia.
+    cosmetic_emblem = _get_cosmetic_asset(
+        "emblem",
+        cosmetic_emblem_id,
+    )
+
+    if cosmetic_emblem is not None:
+        image = _draw_small_cosmetic(
+            image,
+            cosmetic_emblem,
+            (1010, 48),
+            (55, 55),
+        )
+        draw = ImageDraw.Draw(image)
+
+    # Cosmetic badge is also separate from the progression insignia.
+    cosmetic_badge = _get_cosmetic_asset(
+        "badge",
+        cosmetic_badge_id,
+    )
+
+    if cosmetic_badge is not None:
+        image = _draw_small_cosmetic(
+            image,
+            cosmetic_badge,
+            (970, 235),
+            (65, 65),
+        )
         draw = ImageDraw.Draw(image)
 
     # XP progress.
