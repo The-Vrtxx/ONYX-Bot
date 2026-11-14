@@ -1,4 +1,3 @@
-
 """Private ONYX owner/developer portal API routes.
 
 Asset Library management is owner-only. Uploaded asset images are stored in
@@ -230,6 +229,30 @@ def register_owner_routes(app, require_user, bot_owner_id):
             )
 
         return user_id
+
+    async def public_prestige_emblems(request):
+        """Return active prestige emblems for the Discord bot."""
+        async with request.app["db"].acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT item_id, display_name, image_url, version
+                FROM onyx_asset_catalog
+                WHERE category = 'prestige_emblem'
+                  AND is_active = 1
+                  AND image_url IS NOT NULL
+                ORDER BY sort_order, item_id
+            """)
+
+        return web.json_response({
+            "emblems": [
+                {
+                    "item_id": row["item_id"],
+                    "name": row["display_name"],
+                    "image_url": row["image_url"],
+                    "version": int(row["version"] or 1)
+                }
+                for row in rows
+            ]
+        })
 
     async def overview(request):
         user_id, role = await require_developer(request)
@@ -828,6 +851,11 @@ def register_owner_routes(app, require_user, bot_owner_id):
     app.router.add_get(
         "/api/owner/assets/{asset_id}/versions",
         asset_versions
+    )
+
+    app.router.add_get(
+        "/api/assets/prestige-emblems",
+        public_prestige_emblems
     )
 
     # Public image route: the asset itself remains owner-managed.
