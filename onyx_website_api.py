@@ -697,7 +697,8 @@ async def shop_catalog(request):
     async with request.app["db"].acquire() as conn:
         rows = await conn.fetch("""
             SELECT category, item_id, display_name,
-                   price_tokens, description, rarity
+                   price_tokens, description, rarity,
+                   image_url, metadata_json
             FROM onyx_asset_catalog
             WHERE is_active=1 AND is_shop_item=1
             ORDER BY category, sort_order, display_name
@@ -712,6 +713,19 @@ async def shop_catalog(request):
         if category not in SHOP_CATEGORIES:
             continue
 
+        # Metadata is stored as JSON text in PostgreSQL.
+        # Parse it safely so the website receives an object.
+        metadata = row["metadata_json"] or "{}"
+
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+
+        if not isinstance(metadata, dict):
+            metadata = {}
+
         slot = SLOTS.get(category)
         column = slot[0] if slot else None
 
@@ -722,6 +736,8 @@ async def shop_catalog(request):
             "cost": int(row["price_tokens"]),
             "description": row["description"],
             "rarity": row["rarity"],
+            "image_url": row["image_url"],
+            "metadata": metadata,
             "owned": (category, item_id) in owned,
             "equipped": bool(
                 column and equipped.get(column) == item_id
