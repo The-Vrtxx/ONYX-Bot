@@ -1,16 +1,17 @@
-
 """Shared ONYX profile-card renderer for Discord and the website."""
 
 from io import BytesIO
 from pathlib import Path
+import json
+import threading
+import time
+from urllib.request import Request, urlopen
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 
 ASSET_DIR = Path(__file__).resolve().parent / "assets" / "onyx_prestige"
 
-# Keep badge artwork independent from the card renderer.
-# Replace these image files or update this mapping to change the badges.
 PRESTIGE_BADGES = {
     0: "prestige_0.PNG",
     1: "prestige_1.PNG",
@@ -25,6 +26,122 @@ PRESTIGE_BADGES = {
     10: "prestige_10.PNG",
     "master": "prestige_master.PNG",
 }
+
+# Website Asset Library is the source of truth for prestige artwork.
+PRESTIGE_ASSET_API = "https://api.onyxdiscord.com/api/assets/prestige-emblems"
+PRESTIGE_ASSET_BASE = "https://api.onyxdiscord.com"
+PRESTIGE_CACHE_SECONDS = 60
+
+_remote_prestige_badges = {}
+_prestige_cache_lock = threading.Lock()
+_prestige_refresh_started = False
+_prestige_last_refresh = 0.0
+
+
+def _refresh_remote_prestige_badges():
+    """Download current prestige emblems without blocking Discord commands."""
+    global _remote_prestige_badges
+    global _prestige_last_refresh
+    global _prestige_refresh_started
+
+    try:
+        request = Request(
+            PRESTIGE_ASSET_API,
+            headers={"User-Agent": "ONYX-Discord-Bot/1.0"}
+        )
+
+        with urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        refreshed = {}
+
+        for emblem in payload.get("emblems", []):
+            item_id = str(emblem.get("item_id", "")).strip().lower()
+            image_url = str(emblem.get("image_url", "")).strip()
+
+            if not item_id.startswith("prestige_") or not image_url:
+                continue
+
+            if image_url.startswith("/"):
+                image_url = PRESTIGE_ASSET_BASE + image_url
+
+            if not image_url.startswith(("https://", "http://")):
+                continue
+
+            image_request = Request(
+                image_url,
+                headers={"User-Agent": "ONYX-Discord-Bot/1.0"}
+            )
+
+            with urlopen(image_request, timeout=5) as response:
+                image_data = response.read()
+
+            with Image.open(BytesIO(image_data)) as source:
+                source.load()
+                refreshed[item_id] = source.convert("RGBA").copy()
+
+        if refreshed:
+            with _prestige_cache_lock:
+                _remote_prestige_badges = refreshed
+
+    except Exception:
+        # Local repository artwork remains the fallback if the API is offline.
+        pass
+
+    finally:
+        with _prestige_cache_lock:
+            _prestige_last_refresh = time.time()
+            _prestige_refresh_started = False
+
+
+def _request_prestige_refresh():
+    """Refresh the remote cache in a daemon thread when stale."""
+    global _prestige_refresh_started
+
+    with _prestige_cache_lock:
+        stale = time.time() - _prestige_last_refresh >= PRESTIGE_CACHE_SECONDS
+
+        if not stale or _prestige_refresh_started:
+            return
+
+        _prestige_refresh_started = True
+
+    threading.Thread(
+        target=_refresh_remote_prestige_badges,
+        name="onyx-prestige-assets",
+        daemon=True,
+    ).start()
+
+
+def _get_prestige_badge(badge_key):
+    """Return a copy of the latest remote badge, or the local fallback."""
+    item_id = (
+        "prestige_master"
+        if badge_key == "master"
+        else f"prestige_{badge_key}"
+    )
+
+    _request_prestige_refresh()
+
+    with _prestige_cache_lock:
+        remote_badge = _remote_prestige_badges.get(item_id)
+
+        if remote_badge is not None:
+            return remote_badge.copy()
+
+    filename = PRESTIGE_BADGES.get(badge_key, PRESTIGE_BADGES[0])
+    badge_path = ASSET_DIR / filename
+
+    if badge_path.is_file():
+        try:
+            with Image.open(badge_path) as source_badge:
+                source_badge.load()
+                return source_badge.convert("RGBA").copy()
+        except Exception:
+            return None
+
+    return None
+
 
 BASE_XP = 100
 LINEAR_XP = 50
@@ -351,20 +468,13 @@ def render_onyx_profile_card(
 
     # Always show the current progression badge.
     # Shop emblem cosmetics intentionally do not override this badge.
-    badge_filename = PRESTIGE_BADGES.get(
-        badge_key,
-        PRESTIGE_BADGES[0],
-    )
+    insignia = _get_prestige_badge(badge_key)
 
-    badge_path = ASSET_DIR / badge_filename
-
-    if badge_path.is_file():
-        with Image.open(badge_path) as source_badge:
-            insignia = source_badge.convert("RGBA")
-            insignia.thumbnail(
-                (170, 170),
-                Image.Resampling.LANCZOS,
-            )
+    if insignia is not None:
+        insignia.thumbnail(
+            (170, 170),
+            Image.Resampling.LANCZOS,
+        )
 
         image_rgba = image.convert("RGBA")
 
