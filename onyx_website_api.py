@@ -670,7 +670,7 @@ async def on_cleanup(app):
 
 # APPLICATION ROUTES
 def create_app():
-    app = web.Application(middlewares=[cors_and_security], client_max_size=32 * 1024)
+    app = web.Application(middlewares=[cors_and_security], client_max_size=6 * 1024 * 1024)
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
 
