@@ -1,9 +1,44 @@
+
 from datetime import timedelta
+import json
+
 import discord
 from discord.ext import commands
 
+
 class Moderation(commands.Cog):
-    def __init__(self, bot): self.bot = bot
+    def __init__(self, bot):
+        self.bot = bot
+
+    async def cog_check(self, ctx):
+        """Apply the global owner-dashboard moderation switch."""
+        if await self.bot.is_owner(ctx.author):
+            return True
+
+        try:
+            row = await self.bot.db.fetchone(
+                "SELECT features FROM onyx_global_system_settings WHERE id=1"
+            )
+            if not row:
+                return True
+
+            features = row["features"]
+            if isinstance(features, str):
+                features = json.loads(features)
+
+            if not isinstance(features, dict):
+                return True
+
+            enabled = features.get("moderation", True)
+            if isinstance(enabled, bool) and not enabled:
+                await ctx.send("Moderation is currently disabled globally by ONYX.")
+                return False
+
+        except Exception:
+            # Fail open if the settings database cannot be reached.
+            return True
+
+        return True
 
     async def check_target(self, ctx, member):
         if member.id == ctx.author.id:
@@ -168,6 +203,7 @@ class Moderation(commands.Cog):
         if not 0 <= seconds <= 21600: return await ctx.send("Slowmode must be between 0 and 21,600 seconds.")
         await ctx.channel.edit(slowmode_delay=seconds, reason=f"Slowmode set by {ctx.author}")
         await ctx.send(f"Slowmode set to **{seconds} seconds**.")
+
 
 async def setup(bot):
     await bot.add_cog(Moderation(bot))
