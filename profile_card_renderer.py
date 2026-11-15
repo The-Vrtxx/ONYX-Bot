@@ -2,7 +2,6 @@
 """Shared ONYX profile-card renderer for Discord and the website."""
 
 from io import BytesIO
-from pathlib import Path
 import json
 import re
 import threading
@@ -12,24 +11,7 @@ from urllib.request import Request, urlopen
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-
-ASSET_DIR = Path(__file__).resolve().parent / "assets" / "onyx_prestige"
-
-PRESTIGE_BADGES = {
-    0: "prestige_0.PNG",
-    1: "prestige_1.PNG",
-    2: "prestige_2.PNG",
-    3: "prestige_3.PNG",
-    4: "prestige_4.PNG",
-    5: "prestige_5.PNG",
-    6: "prestige_6.PNG",
-    7: "prestige_7.PNG",
-    8: "prestige_8.PNG",
-    9: "prestige_9.PNG",
-    10: "prestige_10.PNG",
-    "master": "prestige_master.PNG",
-}
-
+# Prestige artwork comes exclusively from the website Asset Library.
 PRESTIGE_ASSET_API = "https://api.onyxdiscord.com/api/assets/prestige-emblems"
 PRESTIGE_ASSET_BASE = "https://api.onyxdiscord.com"
 PRESTIGE_CACHE_SECONDS = 60
@@ -47,7 +29,7 @@ _cosmetic_cache_lock = threading.Lock()
 
 
 def _refresh_remote_prestige_badges():
-    """Download current prestige emblems without blocking Discord commands."""
+    """Download current website prestige emblems without blocking commands."""
     global _remote_prestige_badges
     global _prestige_last_refresh
     global _prestige_refresh_started
@@ -61,39 +43,52 @@ def _refresh_remote_prestige_badges():
         with urlopen(request, timeout=5) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
-        refreshed = {}
+        if not isinstance(payload, dict) or not isinstance(payload.get("emblems"), list):
+            raise ValueError("Invalid prestige emblem catalog response")
 
-        for emblem in payload.get("emblems", []):
+        refreshed = {}
+        valid_ids = {f"prestige_{i}" for i in range(11)} | {"prestige_master"}
+
+        for emblem in payload["emblems"]:
+            if not isinstance(emblem, dict):
+                continue
+
             item_id = str(emblem.get("item_id", "")).strip().lower()
             image_url = str(emblem.get("image_url", "")).strip()
 
-            if not item_id.startswith("prestige_") or not image_url:
+            if item_id not in valid_ids or not image_url:
                 continue
 
             if image_url.startswith("/"):
                 image_url = PRESTIGE_ASSET_BASE + image_url
 
-            if not image_url.startswith(("https://", "http://")):
+            # Only accept the official ONYX asset server, not arbitrary URLs.
+            if not image_url.startswith(PRESTIGE_ASSET_BASE + "/"):
                 continue
 
-            image_request = Request(
-                image_url,
-                headers={"User-Agent": "ONYX-Discord-Bot/1.0"}
-            )
+            try:
+                image_request = Request(
+                    image_url,
+                    headers={"User-Agent": "ONYX-Discord-Bot/1.0"}
+                )
 
-            with urlopen(image_request, timeout=5) as response:
-                image_data = response.read()
+                with urlopen(image_request, timeout=5) as response:
+                    image_data = response.read()
 
-            with Image.open(BytesIO(image_data)) as source:
-                source.load()
-                refreshed[item_id] = source.convert("RGBA").copy()
+                with Image.open(BytesIO(image_data)) as source:
+                    source.load()
+                    refreshed[item_id] = source.convert("RGBA").copy()
 
-        if refreshed:
-            with _prestige_cache_lock:
-                _remote_prestige_badges = refreshed
+            except Exception:
+                # A failed download must not cause a local-file fallback.
+                continue
+
+        # Remove deactivated/deleted emblems after each successful catalog fetch.
+        with _prestige_cache_lock:
+            _remote_prestige_badges = refreshed
 
     except Exception:
-        # Local repository artwork remains the fallback if the API is offline.
+        # On API failure, retain only previously fetched website images.
         pass
 
     finally:
@@ -103,7 +98,7 @@ def _refresh_remote_prestige_badges():
 
 
 def _request_prestige_refresh():
-    """Refresh the remote cache in a daemon thread when stale."""
+    """Refresh the website cache in a daemon thread when stale."""
     global _prestige_refresh_started
 
     with _prestige_cache_lock:
@@ -122,7 +117,7 @@ def _request_prestige_refresh():
 
 
 def _get_prestige_badge(badge_key):
-    """Return a copy of the latest remote badge, or the local fallback."""
+    """Return website-uploaded prestige artwork, never a local image."""
     item_id = (
         "prestige_master"
         if badge_key == "master"
@@ -133,22 +128,7 @@ def _get_prestige_badge(badge_key):
 
     with _prestige_cache_lock:
         remote_badge = _remote_prestige_badges.get(item_id)
-
-        if remote_badge is not None:
-            return remote_badge.copy()
-
-    filename = PRESTIGE_BADGES.get(badge_key, PRESTIGE_BADGES[0])
-    badge_path = ASSET_DIR / filename
-
-    if badge_path.is_file():
-        try:
-            with Image.open(badge_path) as source_badge:
-                source_badge.load()
-                return source_badge.convert("RGBA").copy()
-        except Exception:
-            return None
-
-    return None
+        return remote_badge.copy() if remote_badge is not None else None
 
 
 def _get_cosmetic_asset(category, item_id):
@@ -172,7 +152,7 @@ def _get_cosmetic_asset(category, item_id):
     asset_id = f"{category}:{item_id}"
     now = time.time()
 
-    with _cosmetic_cache_lock:
+    with _cosmetic_asset_cache_lock:
         cached = _cosmetic_asset_cache.get(asset_id)
 
         if cached:
@@ -200,7 +180,7 @@ def _get_cosmetic_asset(category, item_id):
     except Exception:
         image = None
 
-    with _cosmetic_cache_lock:
+    with _cosmetic_asset_cache_lock:
         _cosmetic_asset_cache[asset_id] = (
             now,
             image.copy() if image else None,
