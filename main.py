@@ -71,6 +71,10 @@ class CommunityBot(commands.Bot):
         self.owner_id = OWNER_ID
         self.started_at = discord.utils.utcnow()
 
+        # Cog Monitor inventory and startup errors.
+        self.discovered_cogs = []
+        self.failed_cogs = []
+
     async def setup_hook(self):
         try:
             await self.db.connect()
@@ -84,29 +88,55 @@ class CommunityBot(commands.Bot):
                 "ONYX could not connect to or initialize its database. Check Render logs and DATABASE_URL."
             ) from exc
 
+        # Discover every cog before attempting to load extensions.
+        extensions = discover_cog_extensions()
+
+        self.discovered_cogs = sorted(
+            extension.removeprefix("cogs.")
+            for extension in extensions
+        )
+
         loaded, failed = [], []
-        for extension in discover_cog_extensions():
+
+        for extension in extensions:
             cog_name = extension.removeprefix("cogs.")
+
             try:
                 await self.load_extension(extension)
                 loaded.append(cog_name)
                 log.info("Loaded cog: %s", extension)
+
             except Exception as exc:
-                failed.append(cog_name)
+                failed.append({
+                    "name": cog_name,
+                    "error": f"{type(exc).__name__}: {exc}"
+                })
+
                 log.exception(
                     "Could not load cog %s (%s).",
                     extension,
                     type(exc).__name__
                 )
 
+        # Save startup failures for the Cog Monitor.
+        self.failed_cogs = failed
+
         self.tree.clear_commands(guild=None)
         await self.tree.sync()
+
         log.info(
-            "Startup complete. Database backend: %s | Cogs loaded: %s | Cogs failed: %s",
-            self.db.backend, len(loaded), len(failed)
+            "Startup complete. Database backend: %s | Cogs discovered: %s | Cogs loaded: %s | Cogs failed: %s",
+            self.db.backend,
+            len(self.discovered_cogs),
+            len(loaded),
+            len(failed)
         )
+
         if failed:
-            log.error("Cogs that failed to load: %s", ", ".join(failed))
+            log.error(
+                "Cogs that failed to load: %s",
+                ", ".join(item["name"] for item in failed)
+            )
 
     async def close(self):
         await self.db.close()
