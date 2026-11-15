@@ -38,6 +38,7 @@ def default_profile_row():
 def default_cosmetics():
     return {
         "frame_id": "default",
+        "frame_category": "frame",
         "theme_id": "onyx",
         "emblem_id": "default",
         "effect_id": "none",
@@ -61,7 +62,7 @@ async def fetch_profile_card_records(request, user_id):
 
         equipped_row = await conn.fetchrow(
             """
-            SELECT frame_id, theme_id, emblem_id, effect_id,
+            SELECT frame_id, frame_category, theme_id, emblem_id, effect_id,
                    background_id, title_id, badge_id
             FROM onyx_profile_equipped
             WHERE user_id=$1
@@ -71,6 +72,9 @@ async def fetch_profile_card_records(request, user_id):
 
     row = dict(level_row) if level_row else default_profile_row()
     cosmetics = dict(equipped_row) if equipped_row else default_cosmetics()
+
+    # Older database rows or deployments may not yet have a category value.
+    cosmetics.setdefault("frame_category", "frame")
 
     return row, cosmetics
 
