@@ -1,5 +1,34 @@
+
 import discord
+import json
 from discord.ext import commands
+
+
+async def tickets_globally_enabled(bot):
+    """Read the global ONYX Tickets feature switch."""
+    try:
+        row = await bot.db.fetchone(
+            "SELECT features FROM onyx_global_system_settings WHERE id=1"
+        )
+
+        if not row or not row["features"]:
+            return True
+
+        features = row["features"]
+
+        if isinstance(features, str):
+            features = json.loads(features)
+
+        if isinstance(features, dict):
+            enabled = features.get("tickets", True)
+            if isinstance(enabled, bool):
+                return enabled
+
+    except Exception:
+        pass
+
+    # Fail open if the settings database is unavailable.
+    return True
 
 
 class Reports(commands.Cog):
@@ -11,6 +40,17 @@ class Reports(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    async def cog_check(self, ctx):
+        """Block report commands globally while Tickets is disabled."""
+        if await self.bot.is_owner(ctx.author):
+            return True
+
+        if not await tickets_globally_enabled(self.bot):
+            await ctx.send("ONYX Reports are currently disabled globally.")
+            return False
+
+        return True
+
     async def cog_load(self):
         await self.bot.db.execute(
             """
@@ -20,6 +60,7 @@ class Reports(commands.Cog):
             )
             """
         )
+
         await self.bot.db.execute(
             """
             CREATE TABLE IF NOT EXISTS onyx_report_counters (
@@ -28,6 +69,7 @@ class Reports(commands.Cog):
             )
             """
         )
+
         await self.bot.db.execute(
             """
             CREATE TABLE IF NOT EXISTS onyx_central_report_settings (
@@ -36,6 +78,7 @@ class Reports(commands.Cog):
             )
             """
         )
+
         await self.bot.db.execute(
             """
             CREATE TABLE IF NOT EXISTS onyx_central_report_counter (
@@ -48,7 +91,9 @@ class Reports(commands.Cog):
     async def _check_channel(self, channel, guild):
         if not isinstance(channel, discord.TextChannel):
             return False
+
         permissions = channel.permissions_for(guild.me)
+
         return bool(
             permissions.view_channel
             and permissions.send_messages
@@ -75,7 +120,10 @@ class Reports(commands.Cog):
             """,
             (ctx.guild.id, channel.id)
         )
-        await ctx.send(f"Local reports for **{ctx.guild.name}** will be sent to {channel.mention}.")
+
+        await ctx.send(
+            f"Local reports for **{ctx.guild.name}** will be sent to {channel.mention}."
+        )
 
     @commands.command(
         name="setupcentralreports",
@@ -98,6 +146,7 @@ class Reports(commands.Cog):
             """,
             (channel.id,)
         )
+
         await ctx.send(
             f"Central reporting is now enabled. Reports from every server will be forwarded to {channel.mention}."
         )
@@ -113,6 +162,7 @@ class Reports(commands.Cog):
             """,
             (guild_id,)
         )
+
         return int(row["next_ticket"])
 
     async def next_central_ticket_number(self):
@@ -126,6 +176,7 @@ class Reports(commands.Cog):
             """,
             ()
         )
+
         return int(row["next_ticket"])
 
     @commands.command(
@@ -138,6 +189,7 @@ class Reports(commands.Cog):
             "SELECT channel_id FROM onyx_report_settings WHERE guild_id=?",
             (ctx.guild.id,)
         )
+
         central_config = await self.bot.db.fetchone(
             "SELECT channel_id FROM onyx_central_report_settings WHERE id=1",
             ()
@@ -149,18 +201,32 @@ class Reports(commands.Cog):
             )
 
         local_channel = None
+
         if local_config:
-            local_channel = ctx.guild.get_channel(int(local_config["channel_id"]))
+            local_channel = ctx.guild.get_channel(
+                int(local_config["channel_id"])
+            )
+
             if not isinstance(local_channel, discord.TextChannel):
                 local_channel = None
 
         central_channel = None
+
         if central_config:
-            central_channel = self.bot.get_channel(int(central_config["channel_id"]))
+            central_channel = self.bot.get_channel(
+                int(central_config["channel_id"])
+            )
+
             if not isinstance(central_channel, discord.TextChannel):
                 try:
-                    central_channel = await self.bot.fetch_channel(int(central_config["channel_id"]))
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    central_channel = await self.bot.fetch_channel(
+                        int(central_config["channel_id"])
+                    )
+                except (
+                    discord.NotFound,
+                    discord.Forbidden,
+                    discord.HTTPException
+                ):
                     central_channel = None
 
         if local_channel is None and central_channel is None:
@@ -169,26 +235,40 @@ class Reports(commands.Cog):
             )
 
         attachments = list(ctx.message.attachments)
+
         if not details.strip() and not attachments:
             return await ctx.send(
                 "Please include a description, an attachment, or both. Example: `,report I need to report an issue...`"
             )
+
         if len(attachments) > self.MAX_ATTACHMENTS:
-            return await ctx.send(f"Please submit no more than {self.MAX_ATTACHMENTS} attachments in one report.")
+            return await ctx.send(
+                f"Please submit no more than {self.MAX_ATTACHMENTS} attachments in one report."
+            )
 
         details = details.strip() or "No written description was provided."
+
         if len(details) > self.MAX_DETAILS:
-            return await ctx.send(f"Please keep the report description under {self.MAX_DETAILS} characters.")
+            return await ctx.send(
+                f"Please keep the report description under {self.MAX_DETAILS} characters."
+            )
 
         local_number = None
         central_number = None
+
         try:
             if local_channel is not None:
-                local_number = await self.next_server_ticket_number(ctx.guild.id)
+                local_number = await self.next_server_ticket_number(
+                    ctx.guild.id
+                )
+
             if central_channel is not None:
                 central_number = await self.next_central_ticket_number()
+
         except Exception:
-            return await ctx.send("I couldn't assign a report number right now. Please try again shortly.")
+            return await ctx.send(
+                "I couldn't assign a report number right now. Please try again shortly."
+            )
 
         embed = discord.Embed(
             title="New Member Report",
@@ -196,26 +276,45 @@ class Reports(commands.Cog):
             color=discord.Color.dark_teal(),
             timestamp=discord.utils.utcnow()
         )
+
         embed.add_field(
             name="Submitted by",
             value=f"{ctx.author.mention}\n`{ctx.author}` (`{ctx.author.id}`)",
             inline=True
         )
+
         embed.add_field(
             name="Server",
             value=f"{ctx.guild.name}\n`{ctx.guild.id}`",
             inline=True
         )
+
         if local_number is not None:
-            embed.add_field(name="Server report #", value=f"`#{local_number:04d}`", inline=True)
+            embed.add_field(
+                name="Server report #",
+                value=f"`#{local_number:04d}`",
+                inline=True
+            )
+
         if central_number is not None:
-            embed.add_field(name="Central report #", value=f"`#{central_number:05d}`", inline=True)
+            embed.add_field(
+                name="Central report #",
+                value=f"`#{central_number:05d}`",
+                inline=True
+            )
 
         if attachments:
             attachment_lines = []
+
             for index, attachment in enumerate(attachments, start=1):
-                safe_name = discord.utils.escape_markdown(attachment.filename)
-                attachment_lines.append(f"[{index}. {safe_name}]({attachment.url})")
+                safe_name = discord.utils.escape_markdown(
+                    attachment.filename
+                )
+
+                attachment_lines.append(
+                    f"[{index}. {safe_name}]({attachment.url})"
+                )
+
             embed.add_field(
                 name=f"Attachments ({len(attachments)})",
                 value="\n".join(attachment_lines)[:1024],
@@ -228,6 +327,7 @@ class Reports(commands.Cog):
         if local_channel is not None:
             local_embed = embed.copy()
             local_embed.title = f"New Member Report • #{local_number:04d}"
+
             try:
                 await local_channel.send(
                     embed=local_embed,
@@ -240,6 +340,7 @@ class Reports(commands.Cog):
         if central_channel is not None:
             central_embed = embed.copy()
             central_embed.title = f"ONYX Central Report • #{central_number:05d}"
+
             try:
                 await central_channel.send(
                     embed=central_embed,
@@ -251,16 +352,21 @@ class Reports(commands.Cog):
 
         if sent_local or sent_central:
             destinations = []
+
             if sent_central:
                 destinations.append("ONYX staff")
+
             if sent_local:
                 destinations.append("this server's staff")
+
             await ctx.send(
                 f"Your report was submitted successfully to {' and '.join(destinations)}. "
-                f"Central reference: **#{central_number:05d}**." if sent_central
+                f"Central reference: **#{central_number:05d}**."
+                if sent_central
                 else "Your report was submitted successfully.",
                 delete_after=25
             )
+
         else:
             await ctx.send(
                 "I couldn't deliver your report. Please contact a server administrator or the ONYX owner."
