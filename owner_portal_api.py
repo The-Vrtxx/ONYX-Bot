@@ -1,3 +1,4 @@
+
 """Private ONYX owner/developer portal API routes.
 
 Asset Library management is owner-only. Uploaded asset images are stored in
@@ -9,6 +10,8 @@ import re
 from urllib.parse import urlparse
 
 from aiohttp import web
+
+from owner_leveling_api import register_leveling_routes
 
 
 ASSET_CATEGORIES = {
@@ -65,7 +68,6 @@ def _detect_image_type(data):
         if data.startswith(signature):
             return content_type
 
-    # WEBP files use the RIFF container with WEBP at byte offset 8.
     if (
         len(data) >= 12
         and data[:4] == b"RIFF"
@@ -579,7 +581,7 @@ def register_owner_routes(app, require_user, bot_owner_id):
                 row = await conn.fetchrow(
                     "UPDATE onyx_asset_catalog SET " +
                     ", ".join(assignments) +
-                    f", version=version+1, updated_at=CURRENT_TIMESTAMP "
+                    f", version=version+1, updated_at=CURRENT_TIMESTAMP " +
                     f"WHERE asset_id=${len(params)} RETURNING *",
                     *params
                 )
@@ -858,8 +860,9 @@ def register_owner_routes(app, require_user, bot_owner_id):
         public_prestige_emblems
     )
 
-    # Public image route: the asset itself remains owner-managed.
     app.router.add_get(
         "/api/assets/media/{asset_id}",
         asset_media
     )
+
+    register_leveling_routes(app, require_user, bot_owner_id)
