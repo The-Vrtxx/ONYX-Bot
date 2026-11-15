@@ -1,6 +1,8 @@
 
 """Read-only profile data and shared PNG rendering for the ONYX website."""
 
+import asyncio
+
 from aiohttp import web
 
 from profile_card_renderer import render_onyx_profile_card
@@ -74,6 +76,7 @@ async def fetch_profile_card_records(request, user_id):
 
 
 async def profile_card_data(request):
+    """Return the signed-in member's profile and equipped cosmetics."""
     user_id = request.app["profile_card_require_user"](request)
     row, cosmetics = await fetch_profile_card_records(request, user_id)
 
@@ -117,7 +120,12 @@ async def profile_card_data(request):
 
 
 async def profile_card_png(request):
-    """Return the exact Pillow-rendered profile card used by the Discord bot."""
+    """
+    Return the exact Pillow-rendered profile card used by Discord.
+
+    Rendering runs in a worker thread so image downloads and Pillow
+    processing do not block the website's asynchronous event loop.
+    """
     user_id = request.app["profile_card_require_user"](request)
     row, cosmetics = await fetch_profile_card_records(request, user_id)
 
@@ -131,7 +139,8 @@ async def profile_card_png(request):
         else "ONYX Member"
     )
 
-    card = render_onyx_profile_card(
+    card = await asyncio.to_thread(
+        render_onyx_profile_card,
         display_name=display_name,
         row=row,
         unlocked_titles=[],
@@ -144,6 +153,7 @@ async def profile_card_png(request):
         content_type="image/png",
         headers={
             "Content-Disposition": 'inline; filename="onyx-profile-card.png"',
+            "Cache-Control": "private, no-cache",
         },
     )
 
@@ -153,6 +163,7 @@ def register_profile_card_route(
     require_user,
     get_display_name=None
 ):
+    """Register profile-card API routes."""
     app["profile_card_require_user"] = require_user
 
     if get_display_name:
