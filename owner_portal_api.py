@@ -7,6 +7,7 @@ PostgreSQL so they survive Render restarts and deployments.
 
 import json
 import re
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from aiohttp import web
@@ -199,6 +200,22 @@ async def _ensure_asset_media_table(conn):
     """)
 
 
+async def _ensure_runtime_health_table(conn):
+    """Create the runtime health table if it does not exist."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS onyx_bot_runtime_health (
+            id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'starting',
+            database_status TEXT NOT NULL DEFAULT 'unknown',
+            uptime_seconds BIGINT NOT NULL DEFAULT 0,
+            guild_count BIGINT NOT NULL DEFAULT 0,
+            member_count BIGINT NOT NULL DEFAULT 0,
+            loaded_cogs TEXT NOT NULL DEFAULT '[]',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+
 def register_owner_routes(app, require_user, bot_owner_id):
     """Register protected owner/developer endpoints."""
 
@@ -232,6 +249,81 @@ def register_owner_routes(app, require_user, bot_owner_id):
             )
 
         return user_id
+
+    async def system_health(request):
+        """Return live bot and API database health information."""
+        await require_owner(request)
+
+        async with request.app["db"].acquire() as conn:
+            await conn.fetchval("SELECT 1")
+            api_database = "connected"
+
+            await _ensure_runtime_health_table(conn)
+
+            row = await conn.fetchrow("""
+                SELECT status, database_status, uptime_seconds,
+                       guild_count, member_count, loaded_cogs,
+                       updated_at
+                FROM onyx_bot_runtime_health
+                WHERE id=1
+            """)
+
+        if row is None:
+            return web.json_response({
+                "bot_status": "offline",
+                "database_status": "unknown",
+                "api_database_status": api_database,
+                "uptime_seconds": 0,
+                "guild_count": 0,
+                "member_count": 0,
+                "loaded_cogs": [],
+                "loaded_cog_count": 0,
+                "last_heartbeat": None,
+                "heartbeat_age_seconds": None,
+                "message": "No bot heartbeat has been received yet."
+            })
+
+        updated_at = row["updated_at"]
+
+        if updated_at and updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+
+        age_seconds = (
+            (datetime.now(timezone.utc) - updated_at).total_seconds()
+            if updated_at else None
+        )
+
+        bot_online = (
+            age_seconds is not None
+            and 0 <= age_seconds <= 90
+            and row["status"] == "online"
+        )
+
+        try:
+            loaded_cogs = json.loads(row["loaded_cogs"] or "[]")
+        except (TypeError, ValueError):
+            loaded_cogs = []
+
+        if not isinstance(loaded_cogs, list):
+            loaded_cogs = []
+
+        return web.json_response({
+            "bot_status": "online" if bot_online else "offline",
+            "database_status": row["database_status"],
+            "api_database_status": api_database,
+            "uptime_seconds": int(row["uptime_seconds"] or 0),
+            "guild_count": int(row["guild_count"] or 0),
+            "member_count": int(row["member_count"] or 0),
+            "loaded_cogs": loaded_cogs,
+            "loaded_cog_count": len(loaded_cogs),
+            "last_heartbeat": (
+                updated_at.isoformat() if updated_at else None
+            ),
+            "heartbeat_age_seconds": (
+                round(age_seconds, 1)
+                if age_seconds is not None else None
+            )
+        })
 
     async def public_prestige_emblems(request):
         """Return active prestige emblems for the Discord bot."""
@@ -843,6 +935,8 @@ def register_owner_routes(app, require_user, bot_owner_id):
     app.router.add_get("/api/developer/team", team_list)
     app.router.add_post("/api/developer/team/add", team_add)
     app.router.add_post("/api/developer/team/remove", team_remove)
+
+    app.router.add_get("/api/owner/system-health", system_health)
 
     app.router.add_get("/api/owner/assets", assets_list)
     app.router.add_post("/api/owner/assets", asset_create)
