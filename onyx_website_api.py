@@ -58,6 +58,7 @@ SHOP = {
 # Category -> (database column, default value)
 SLOTS = {
     "frame": ("frame_id", "default"),
+    "border": ("frame_id", "default"),
     "theme": ("theme_id", "onyx"),
     "emblem": ("emblem_id", "default"),
     "effect": ("effect_id", "none"),
@@ -250,6 +251,14 @@ async def ensure_tables(pool):
         ADD COLUMN IF NOT EXISTS badge_id TEXT NOT NULL DEFAULT 'default'
     """)
 
+    # Frames and borders share one equipment slot. This column records
+    # which Asset Library category the selected frame_id belongs to.
+    # Existing frame_id values remain frames by default.
+    await pool.execute("""
+        ALTER TABLE onyx_profile_equipped
+        ADD COLUMN IF NOT EXISTS frame_category TEXT NOT NULL DEFAULT 'frame'
+    """)
+
     await pool.execute("""
         CREATE TABLE IF NOT EXISTS onyx_web_guilds (
             user_id BIGINT PRIMARY KEY,
@@ -373,8 +382,8 @@ async def get_profile_data(pool, user_id):
             """, user_id)
 
             equipped = await conn.fetchrow("""
-                SELECT frame_id, theme_id, emblem_id, effect_id,
-                       background_id, title_id, badge_id
+                SELECT frame_id, frame_category, theme_id, emblem_id,
+                       effect_id, background_id, title_id, badge_id
                 FROM onyx_profile_equipped
                 WHERE user_id=$1
             """, user_id)
@@ -729,8 +738,19 @@ async def shop_catalog(request):
         slot = SLOTS.get(category)
         column = slot[0] if slot else None
 
+        if category in {"frame", "border"}:
+            is_equipped = (
+                equipped.get("frame_category", "frame") == category
+                and equipped.get("frame_id") == item_id
+            )
+        else:
+            is_equipped = bool(
+                column and equipped.get(column) == item_id
+            )
+
         catalog.append({
             "category": category,
+            "section": "frame" if category in {"frame", "border"} else category,
             "id": item_id,
             "name": row["display_name"],
             "cost": int(row["price_tokens"]),
@@ -739,9 +759,7 @@ async def shop_catalog(request):
             "image_url": row["image_url"],
             "metadata": metadata,
             "owned": (category, item_id) in owned,
-            "equipped": bool(
-                column and equipped.get(column) == item_id
-            ),
+            "equipped": is_equipped,
             "collectible": category in COLLECTIBLE_CATEGORIES
         })
 
@@ -874,6 +892,9 @@ async def equip_item(request):
 
     column, default_value = SLOTS[category]
 
+    if category in {"frame", "border"} and item_id == "":
+        item_id = "default"
+
     async with request.app["db"].acquire() as conn:
         async with conn.transaction():
             await conn.execute("""
@@ -907,16 +928,29 @@ async def equip_item(request):
                     )
 
             # Column names come only from the fixed SLOTS allowlist.
-            await conn.execute(
-                f"UPDATE onyx_profile_equipped SET {column}=$1 WHERE user_id=$2",
-                item_id,
-                user_id
-            )
+            # Frames and borders share frame_id, with frame_category
+            # preserving the exact Asset Library category.
+            if category in {"frame", "border"}:
+                selected_category = (
+                    "frame" if item_id == default_value else category
+                )
+                await conn.execute("""
+                    UPDATE onyx_profile_equipped
+                    SET frame_id=$1, frame_category=$2
+                    WHERE user_id=$3
+                """, item_id, selected_category, user_id)
+            else:
+                await conn.execute(
+                    f"UPDATE onyx_profile_equipped SET {column}=$1 WHERE user_id=$2",
+                    item_id,
+                    user_id
+                )
 
     return web.json_response({
         "ok": True,
         "category": category,
-        "equipped": item_id
+        "equipped": item_id,
+        "section": "frame" if category in {"frame", "border"} else category
     })
 
 
