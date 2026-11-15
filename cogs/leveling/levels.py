@@ -7,6 +7,7 @@ settings tables are intentionally left untouched for backwards compatibility.
 """
 
 import asyncio
+import json
 import random
 import time
 
@@ -107,6 +108,12 @@ class PrestigeChoiceView(discord.ui.View):
         if self.finished:
             return await interaction.response.send_message(
                 "This choice has already been handled.", ephemeral=True
+            )
+
+        if not await self.cog.feature_enabled("prestige"):
+            return await interaction.response.send_message(
+                "Prestige is currently disabled by ONYX.",
+                ephemeral=True,
             )
 
         applied = await self.cog.apply_prestige(self.user_id)
@@ -226,6 +233,31 @@ class Levels(commands.Cog):
         }
         self._settings_loaded_at = 0
         self._settings_lock = asyncio.Lock()
+
+    async def feature_enabled(self, feature_name: str) -> bool:
+        """Read one global feature toggle. Fail open if settings cannot be read."""
+        try:
+            row = await self.bot.db.fetchone("""
+                SELECT features
+                FROM onyx_global_system_settings
+                WHERE id=1
+            """)
+
+            if not row:
+                return True
+
+            features = row["features"]
+            if isinstance(features, str):
+                features = json.loads(features)
+
+            if not isinstance(features, dict):
+                return True
+
+            value = features.get(feature_name, True)
+            return value if isinstance(value, bool) else True
+
+        except Exception:
+            return True
 
     async def cog_load(self):
         await self.bot.db.execute("""
@@ -398,6 +430,9 @@ class Levels(commands.Cog):
         return dict(row) if row is not None else {}
 
     async def apply_prestige(self, user_id: int) -> bool:
+        if not await self.feature_enabled("prestige"):
+            return False
+
         async with self._prestige_lock:
             row = await self.profile(user_id)
             if not self.eligible(row) or row["master_mode"]:
@@ -486,7 +521,7 @@ class Levels(commands.Cog):
         if self.eligible(new_row) and not new_row["master_mode"]:
             ending = (
                 f"\n🏆 You've reached Level {MAX_LEVEL}! "
-                "Use `,prestige` when you're ready to choose your next step."
+                "Use `,prestige` whenever you're ready to choose your next step."
             )
         else:
             ending = ""
@@ -501,6 +536,9 @@ class Levels(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
+        if not await self.feature_enabled("leveling"):
+            return
+
         if (
             not message.guild
             or message.author.bot
@@ -545,6 +583,9 @@ class Levels(commands.Cog):
         help="View your global ONYX profile card.",
     )
     async def rank(self, ctx, member: discord.User = None):
+        if not await self.feature_enabled("leveling"):
+            return await ctx.send("Global leveling is currently disabled by ONYX.")
+
         member = member or ctx.author
         row = await self.profile(member.id)
         unlocked = self.unlocked_titles(row)
@@ -569,6 +610,9 @@ class Levels(commands.Cog):
         help="View the global ONYX leveling leaderboard.",
     )
     async def leaderboard(self, ctx):
+        if not await self.feature_enabled("leveling"):
+            return await ctx.send("Global leveling is currently disabled by ONYX.")
+
         rows = await self.bot.db.fetchall(
             """
             SELECT user_id,prestige,level,master_mode,master_level,xp,lifetime_xp
@@ -609,6 +653,9 @@ class Levels(commands.Cog):
         help="View and claim your global Prestige progression.",
     )
     async def prestige(self, ctx):
+        if not await self.feature_enabled("prestige"):
+            return await ctx.send("Prestige is currently disabled by ONYX.")
+
         row = await self.profile(ctx.author.id)
         if row["master_mode"] and int(row["master_level"]) >= MAX_MASTER_LEVEL:
             return await ctx.send(
@@ -650,6 +697,9 @@ class Levels(commands.Cog):
         help="View the global Prestige leaderboard.",
     )
     async def prestige_leaderboard(self, ctx):
+        if not await self.feature_enabled("prestige"):
+            return await ctx.send("Prestige is currently disabled by ONYX.")
+
         rows = await self.bot.db.fetchall(
             """
             SELECT user_id,prestige,level,master_mode,master_level,lifetime_xp
