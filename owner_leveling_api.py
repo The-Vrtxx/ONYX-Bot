@@ -8,6 +8,7 @@ DEFAULT_SETTINGS = {
     "min_xp": 15,
     "max_xp": 25,
     "cooldown_seconds": 60,
+    "double_xp_enabled": False,
 }
 
 LIMITS = {
@@ -18,25 +19,49 @@ LIMITS = {
 
 
 async def ensure_leveling_settings_table(conn):
-    """Create the settings table without modifying existing progression."""
+    """Create or safely extend settings without changing progression."""
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS onyx_global_level_settings (
             id INTEGER PRIMARY KEY,
             min_xp INTEGER NOT NULL DEFAULT 15,
             max_xp INTEGER NOT NULL DEFAULT 25,
             cooldown_seconds INTEGER NOT NULL DEFAULT 60,
+            double_xp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_by BIGINT
         )
     """)
 
     await conn.execute("""
+        ALTER TABLE onyx_global_level_settings
+        ADD COLUMN IF NOT EXISTS double_xp_enabled
+        BOOLEAN NOT NULL DEFAULT FALSE
+    """)
+
+    await conn.execute("""
         INSERT INTO onyx_global_level_settings (
-            id, min_xp, max_xp, cooldown_seconds
+            id, min_xp, max_xp, cooldown_seconds, double_xp_enabled
         )
-        VALUES (1, 15, 25, 60)
+        VALUES (1, 15, 25, 60, FALSE)
         ON CONFLICT (id) DO NOTHING
     """)
+
+
+def serialize_settings(row):
+    return {
+        "min_xp": int(row["min_xp"]),
+        "max_xp": int(row["max_xp"]),
+        "cooldown_seconds": int(row["cooldown_seconds"]),
+        "double_xp_enabled": bool(row["double_xp_enabled"]),
+        "updated_at": (
+            row["updated_at"].isoformat()
+            if row["updated_at"] else None
+        ),
+        "updated_by": (
+            str(row["updated_by"])
+            if row["updated_by"] is not None else None
+        ),
+    }
 
 
 def register_leveling_routes(app, require_user, bot_owner_id):
@@ -61,25 +86,13 @@ def register_leveling_routes(app, require_user, bot_owner_id):
 
             row = await conn.fetchrow("""
                 SELECT min_xp, max_xp, cooldown_seconds,
-                       updated_at, updated_by
+                       double_xp_enabled, updated_at, updated_by
                 FROM onyx_global_level_settings
                 WHERE id=1
             """)
 
         return web.json_response({
-            "settings": {
-                "min_xp": int(row["min_xp"]),
-                "max_xp": int(row["max_xp"]),
-                "cooldown_seconds": int(row["cooldown_seconds"]),
-                "updated_at": (
-                    row["updated_at"].isoformat()
-                    if row["updated_at"] else None
-                ),
-                "updated_by": (
-                    str(row["updated_by"])
-                    if row["updated_by"] is not None else None
-                ),
-            }
+            "settings": serialize_settings(row)
         })
 
     async def update_settings(request):
@@ -103,7 +116,8 @@ def register_leveling_routes(app, require_user, bot_owner_id):
             return web.json_response(
                 {
                     "error": (
-                        "Provide min_xp, max_xp, and cooldown_seconds."
+                        "Provide min_xp, max_xp, cooldown_seconds, "
+                        "and double_xp_enabled."
                     )
                 },
                 status=400,
@@ -139,6 +153,14 @@ def register_leveling_routes(app, require_user, bot_owner_id):
                 status=400,
             )
 
+        double_xp_enabled = body.get("double_xp_enabled")
+
+        if not isinstance(double_xp_enabled, bool):
+            return web.json_response(
+                {"error": "double_xp_enabled must be true or false."},
+                status=400,
+            )
+
         async with request.app["db"].acquire() as conn:
             await ensure_leveling_settings_table(conn)
 
@@ -147,34 +169,24 @@ def register_leveling_routes(app, require_user, bot_owner_id):
                 SET min_xp=$1,
                     max_xp=$2,
                     cooldown_seconds=$3,
+                    double_xp_enabled=$4,
                     updated_at=CURRENT_TIMESTAMP,
-                    updated_by=$4
+                    updated_by=$5
                 WHERE id=1
                 RETURNING min_xp, max_xp, cooldown_seconds,
-                          updated_at, updated_by
+                          double_xp_enabled, updated_at, updated_by
             """,
                 values["min_xp"],
                 values["max_xp"],
                 values["cooldown_seconds"],
+                double_xp_enabled,
                 owner_id,
             )
 
         return web.json_response({
             "ok": True,
             "message": "Global leveling settings saved.",
-            "settings": {
-                "min_xp": int(row["min_xp"]),
-                "max_xp": int(row["max_xp"]),
-                "cooldown_seconds": int(row["cooldown_seconds"]),
-                "updated_at": (
-                    row["updated_at"].isoformat()
-                    if row["updated_at"] else None
-                ),
-                "updated_by": (
-                    str(row["updated_by"])
-                    if row["updated_by"] is not None else None
-                ),
-            },
+            "settings": serialize_settings(row),
         })
 
     app.router.add_get(
