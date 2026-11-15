@@ -183,10 +183,69 @@ async def normalize_spaced_command(bot, message):
             return
 
 
+async def get_global_maintenance_settings():
+    """Read the global maintenance settings from PostgreSQL."""
+    try:
+        row = await bot.db.fetchone("""
+            SELECT maintenance_enabled, maintenance_message
+            FROM onyx_global_system_settings
+            WHERE id=1
+        """)
+
+        if not row:
+            return False, None
+
+        return (
+            bool(row["maintenance_enabled"]),
+            str(row["maintenance_message"] or "ONYX is temporarily undergoing maintenance.")
+        )
+
+    except Exception:
+        log.exception("Could not load global maintenance settings.")
+        # Fail open if settings cannot be read, so a database issue
+        # does not accidentally lock everyone out of the bot.
+        return False, None
+
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
+
+    # The bot owner can always use commands, including during maintenance.
+    try:
+        is_owner = await bot.is_owner(message.author)
+    except Exception:
+        log.exception("Could not verify bot owner.")
+        is_owner = message.author.id == bot.owner_id
+
+    # Identify commands using the configured prefix or bot mention.
+    prefixes = await _prefixes(bot, message)
+    is_command = any(
+        message.content.startswith(prefix)
+        for prefix in prefixes
+        if prefix
+    )
+
+    # Maintenance blocks commands from everyone except the bot owner.
+    if is_command and not is_owner:
+        maintenance_enabled, maintenance_message = (
+            await get_global_maintenance_settings()
+        )
+
+        if maintenance_enabled:
+            try:
+                await message.reply(
+                    maintenance_message,
+                    mention_author=False
+                )
+            except discord.HTTPException:
+                log.warning(
+                    "Could not send maintenance response in channel %s.",
+                    message.channel.id
+                )
+            return
+
     await normalize_command_alias(bot, message)
     await normalize_spaced_command(bot, message)
     await bot.process_commands(message)
