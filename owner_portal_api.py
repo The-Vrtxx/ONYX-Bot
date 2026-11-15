@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 from owner_leveling_api import register_leveling_routes
+from system_settings_api import register_system_settings_routes
 
 
 ASSET_CATEGORIES = {
