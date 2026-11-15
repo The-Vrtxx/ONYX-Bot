@@ -1,5 +1,5 @@
 
-"""Owner-only API for ONYX global leveling settings."""
+"""Owner-only controls and public status for ONYX global leveling."""
 
 from aiohttp import web
 
@@ -65,7 +65,7 @@ def serialize_settings(row):
 
 
 def register_leveling_routes(app, require_user, bot_owner_id):
-    """Register owner-only global leveling settings endpoints."""
+    """Register owner-only controls and public read-only status."""
 
     def require_owner(request):
         user_id = require_user(request)
@@ -77,6 +77,33 @@ def register_leveling_routes(app, require_user, bot_owner_id):
             )
 
         return int(user_id)
+
+    async def get_public_settings(request):
+        """Public read-only global leveling information."""
+        async with request.app["db"].acquire() as conn:
+            await ensure_leveling_settings_table(conn)
+
+            row = await conn.fetchrow("""
+                SELECT min_xp, max_xp, cooldown_seconds,
+                       double_xp_enabled, updated_at, updated_by
+                FROM onyx_global_level_settings
+                WHERE id=1
+            """)
+
+        settings = serialize_settings(row)
+
+        return web.json_response({
+            "settings": {
+                "min_xp": settings["min_xp"],
+                "max_xp": settings["max_xp"],
+                "cooldown_seconds": settings["cooldown_seconds"],
+                "double_xp_enabled": settings["double_xp_enabled"],
+                "multiplier": (
+                    2 if settings["double_xp_enabled"] else 1
+                ),
+                "updated_at": settings["updated_at"],
+            }
+        })
 
     async def get_settings(request):
         require_owner(request)
@@ -190,9 +217,15 @@ def register_leveling_routes(app, require_user, bot_owner_id):
         })
 
     app.router.add_get(
+        "/api/public/leveling",
+        get_public_settings,
+    )
+
+    app.router.add_get(
         "/api/owner/leveling/settings",
         get_settings,
     )
+
     app.router.add_put(
         "/api/owner/leveling/settings",
         update_settings,
