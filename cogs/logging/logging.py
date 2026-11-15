@@ -1,4 +1,6 @@
+
 import asyncio
+import json
 import discord
 from discord.ext import commands
 
@@ -7,8 +9,48 @@ class ServerLogging(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    async def logging_enabled(self):
+        """Check the global ONYX Logging feature switch."""
+        try:
+            row = await self.bot.db.fetchone(
+                "SELECT features FROM onyx_global_system_settings WHERE id=1"
+            )
+
+            if not row or not row["features"]:
+                return True
+
+            features = row["features"]
+            if isinstance(features, str):
+                features = json.loads(features)
+
+            if isinstance(features, dict):
+                enabled = features.get("logging", True)
+                if isinstance(enabled, bool):
+                    return enabled
+
+        except Exception:
+            pass
+
+        # Fail open if the settings database is unavailable.
+        return True
+
+    async def cog_check(self, ctx):
+        """Allow the bot owner to manage logging while it is globally paused."""
+        if await self.bot.is_owner(ctx.author):
+            return True
+
+        if not await self.logging_enabled():
+            await ctx.send("ONYX Logging is currently disabled globally.")
+            return False
+
+        return True
+
     async def send_log(self, guild, title, description,
                        color=discord.Color.blurple()):
+        # All event listeners use this method, so this pauses every log event.
+        if not await self.logging_enabled():
+            return
+
         row = await self.bot.db.fetchone(
             "SELECT log_channel_id FROM guild_settings WHERE guild_id=?",
             (guild.id,)
