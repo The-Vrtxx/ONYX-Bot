@@ -1,3 +1,4 @@
+
 import json
 import re
 from datetime import timedelta
@@ -23,9 +24,37 @@ def parse_duration(value: str):
 
 class Jail(commands.Cog):
     """Persistent jail roles, role restoration, and timed release."""
+
     def __init__(self, bot):
         self.bot = bot
         self.expiration_worker.start()
+
+    async def cog_check(self, ctx):
+        if await self.bot.is_owner(ctx.author):
+            return True
+
+        try:
+            row = await self.bot.db.fetchone(
+                "SELECT features FROM onyx_global_system_settings WHERE id=1"
+            )
+
+            if row:
+                features = row["features"]
+                if isinstance(features, str):
+                    features = json.loads(features)
+
+                if isinstance(features, dict):
+                    enabled = features.get("moderation", True)
+                    if isinstance(enabled, bool) and not enabled:
+                        await ctx.send(
+                            "Moderation is currently disabled globally by ONYX."
+                        )
+                        return False
+
+        except Exception:
+            pass
+
+        return True
 
     def cog_unload(self):
         self.expiration_worker.cancel()
@@ -55,8 +84,6 @@ class Jail(commands.Cog):
         if role >= me.top_role:
             return await ctx.send("Move ONYX's highest role above the new **Jailed** role, then run `,setup jail` again.")
 
-        # Staff visibility is inferred from actual Discord moderation/admin permissions;
-        # no staff roles are created or registered by ONYX.
         staff_roles = []
         staff_flags = ("administrator", "manage_guild", "manage_channels", "manage_messages",
                        "moderate_members", "kick_members", "ban_members", "manage_roles")
@@ -74,8 +101,6 @@ class Jail(commands.Cog):
         elif channel.category_id != category.id:
             await channel.edit(category=category, reason="ONYX jail system setup")
 
-        # The new Jailed role is hidden from every existing category/channel by default.
-        # The dedicated JAIL category and #jail channel explicitly grant access.
         for item in list(guild.categories) + [c for c in guild.channels if not isinstance(c, discord.CategoryChannel)]:
             if item.id in (category.id, channel.id):
                 continue
@@ -112,7 +137,6 @@ class Jail(commands.Cog):
             "ON CONFLICT(guild_id) DO UPDATE SET role_id=excluded.role_id,category_id=excluded.category_id,channel_id=excluded.channel_id",
             (guild.id, role.id, category.id, channel.id)
         )
-        # Keep the anti-nuke jail punishment pointed at this same role when configured.
         await self.bot.db.execute(
             "UPDATE onyx_antinuke_settings SET jail_role_id=? WHERE guild_id=?", (role.id, guild.id)
         )
@@ -233,7 +257,7 @@ class Jail(commands.Cog):
     @commands.command(name="jailcancel", help="Remove a member's scheduled jail release without releasing them.")
     @commands.has_permissions(moderate_members=True)
     async def jailcancel(self, ctx, member: discord.Member):
-        result = await self.bot.db.execute("UPDATE onyx_jails SET expires_at=NULL WHERE guild_id=? AND user_id=?", (ctx.guild.id, member.id))
+        await self.bot.db.execute("UPDATE onyx_jails SET expires_at=NULL WHERE guild_id=? AND user_id=?", (ctx.guild.id, member.id))
         row = await self.bot.db.fetchone("SELECT user_id FROM onyx_jails WHERE guild_id=? AND user_id=?", (ctx.guild.id, member.id))
         await ctx.send("Automatic release cancelled; the member remains jailed." if row else "That member has no ONYX jail record.")
 
