@@ -867,3 +867,4 @@ def register_owner_routes(app, require_user, bot_owner_id):
     )
 
     register_leveling_routes(app, require_user, bot_owner_id)
+    register_system_settings_routes(app, require_user, bot_owner_id)
