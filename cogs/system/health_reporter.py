@@ -1,7 +1,6 @@
 
 import json
 import logging
-from datetime import timezone
 
 from discord.ext import commands, tasks
 
@@ -25,10 +24,48 @@ class HealthReporter(commands.Cog):
                 guild_count BIGINT NOT NULL DEFAULT 0,
                 member_count BIGINT NOT NULL DEFAULT 0,
                 loaded_cogs TEXT NOT NULL DEFAULT '[]',
+                discovered_cogs TEXT NOT NULL DEFAULT '[]',
+                failed_cogs TEXT NOT NULL DEFAULT '[]',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+
+        # Safely add the new fields to existing installations.
+        if self.bot.db.backend == "postgres":
+            await self.bot.db.execute(
+                """
+                ALTER TABLE onyx_bot_runtime_health
+                ADD COLUMN IF NOT EXISTS discovered_cogs TEXT NOT NULL DEFAULT '[]'
+                """
+            )
+            await self.bot.db.execute(
+                """
+                ALTER TABLE onyx_bot_runtime_health
+                ADD COLUMN IF NOT EXISTS failed_cogs TEXT NOT NULL DEFAULT '[]'
+                """
+            )
+        else:
+            columns = await self.bot.db.fetchall(
+                "PRAGMA table_info(onyx_bot_runtime_health)"
+            )
+            column_names = {column["name"] for column in columns}
+
+            if "discovered_cogs" not in column_names:
+                await self.bot.db.execute(
+                    """
+                    ALTER TABLE onyx_bot_runtime_health
+                    ADD COLUMN discovered_cogs TEXT NOT NULL DEFAULT '[]'
+                    """
+                )
+
+            if "failed_cogs" not in column_names:
+                await self.bot.db.execute(
+                    """
+                    ALTER TABLE onyx_bot_runtime_health
+                    ADD COLUMN failed_cogs TEXT NOT NULL DEFAULT '[]'
+                    """
+                )
 
         self.publish_health.start()
 
@@ -43,9 +80,6 @@ class HealthReporter(commands.Cog):
             database_status = "connected"
 
             # Calculate actual bot uptime.
-            started_at = self.bot.started_at
-            now = self.bot.get_cog("HealthReporter")
-
             current_time = self.bot.loop.time()
             start_timestamp = getattr(
                 self.bot,
@@ -62,9 +96,22 @@ class HealthReporter(commands.Cog):
                     int(current_time - start_timestamp)
                 )
 
-            # Include loaded extension names.
+            # Read the extension inventory recorded during startup.
+            discovered_cogs = sorted(
+                getattr(self.bot, "discovered_cogs", [])
+            )
+
+            failed_cogs = getattr(
+                self.bot,
+                "failed_cogs",
+                []
+            )
+
+            # Always use Discord.py's live extension registry
+            # for the successfully loaded list.
             loaded_cogs = sorted(
-                self.bot.extensions.keys()
+                extension.removeprefix("cogs.")
+                for extension in self.bot.extensions.keys()
             )
 
             # Count actual guilds and cached members.
@@ -85,9 +132,11 @@ class HealthReporter(commands.Cog):
                     guild_count,
                     member_count,
                     loaded_cogs,
+                    discovered_cogs,
+                    failed_cogs,
                     updated_at
                 )
-                VALUES (1, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     status=excluded.status,
                     database_status=excluded.database_status,
@@ -95,6 +144,8 @@ class HealthReporter(commands.Cog):
                     guild_count=excluded.guild_count,
                     member_count=excluded.member_count,
                     loaded_cogs=excluded.loaded_cogs,
+                    discovered_cogs=excluded.discovered_cogs,
+                    failed_cogs=excluded.failed_cogs,
                     updated_at=CURRENT_TIMESTAMP
                 """,
                 (
@@ -103,7 +154,9 @@ class HealthReporter(commands.Cog):
                     uptime_seconds,
                     guild_count,
                     member_count,
-                    json.dumps(loaded_cogs)
+                    json.dumps(loaded_cogs),
+                    json.dumps(discovered_cogs),
+                    json.dumps(failed_cogs)
                 )
             )
 
