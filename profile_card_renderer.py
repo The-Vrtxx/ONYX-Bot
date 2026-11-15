@@ -112,6 +112,8 @@ def _get_cosmetic_asset(category, item_id):
         "background",
         "emblem",
         "badge",
+        "frame",
+        "border",
     }:
         return None
 
@@ -272,6 +274,24 @@ def _draw_small_cosmetic(image, asset, position, max_size):
     return image
 
 
+def _draw_frame_asset(image, frame_asset):
+    """Overlay a transparent Asset Library frame or border over the card."""
+    if frame_asset is None:
+        return image
+
+    try:
+        image = image.convert("RGBA")
+        overlay = frame_asset.copy().convert("RGBA")
+        overlay = overlay.resize(
+            image.size,
+            Image.Resampling.LANCZOS,
+        )
+        image.alpha_composite(overlay)
+        return image
+    except Exception:
+        return image.convert("RGBA")
+
+
 def render_onyx_profile_card(
     display_name: str,
     row,
@@ -289,10 +309,22 @@ def render_onyx_profile_card(
     cosmetics = cosmetics or {}
 
     theme_key = str(cosmetics.get("theme_id") or "onyx").lower()
+    frame_category = str(
+        cosmetics.get("frame_category") or "frame"
+    ).strip().lower()
+
+    if frame_category not in {"frame", "border"}:
+        frame_category = "frame"
+
     frame_key = str(cosmetics.get("frame_id") or "default").lower()
     effect_key = str(cosmetics.get("effect_id") or "none").lower()
 
     background_id = cosmetics.get("background_id")
+    frame_asset = (
+        _get_cosmetic_asset(frame_category, frame_key)
+        if frame_key != "default"
+        else None
+    )
     cosmetic_emblem_id = cosmetics.get("emblem_id")
     cosmetic_badge_id = cosmetics.get("badge_id")
     cosmetic_title_id = cosmetics.get("title_id")
@@ -639,6 +671,10 @@ def render_onyx_profile_card(
         font=font_label,
         fill=(235, 242, 248),
     )
+
+    # Transparent Asset Library frame/border artwork sits above card content.
+    # If no uploaded artwork is available, the legacy drawn frame remains.
+    image = _draw_frame_asset(image, frame_asset)
 
     # Return a PNG in memory.
     output = BytesIO()
