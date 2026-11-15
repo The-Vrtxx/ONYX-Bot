@@ -1,3 +1,6 @@
+
+import json
+
 import discord
 from discord.ext import commands
 
@@ -7,6 +10,37 @@ class Honeypot(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+
+    async def security_enabled(self):
+        """Read the global Security feature state."""
+        try:
+            row = await self.bot.db.fetchone(
+                "SELECT features FROM onyx_global_system_settings WHERE id=1"
+            )
+
+            if not row or not row["features"]:
+                return True
+
+            features = row["features"]
+
+            if isinstance(features, str):
+                features = json.loads(features)
+
+            return bool(features.get("security", True))
+
+        except Exception:
+            return True
+
+    async def cog_check(self, ctx):
+        """Allow the bot owner to configure Honeypot while Security is disabled."""
+        if await self.bot.is_owner(ctx.author):
+            return True
+
+        if not await self.security_enabled():
+            await ctx.send("ONYX Security is currently disabled globally.")
+            return False
+
+        return True
 
     async def cog_load(self):
         await self.bot.db.execute(
@@ -39,18 +73,23 @@ class Honeypot(commands.Cog):
     @honeypot.command(name="create")
     @commands.has_guild_permissions(manage_guild=True)
     @commands.bot_has_guild_permissions(
-        manage_channels=True, manage_messages=True, ban_members=True
+        manage_channels=True,
+        manage_messages=True,
+        ban_members=True
     )
     async def create(self, ctx, *, channel_name: str = "dont-type-here"):
         """Create the honeypot channel and enable automatic detection."""
         existing = await self.get_config(ctx.guild.id)
+
         if existing:
             channel = ctx.guild.get_channel(int(existing["channel_id"]))
+
             if channel:
                 return await ctx.send(
                     f"The honeypot is already active in {channel.mention}. "
                     f"Use `{ctx.prefix}honeypot status` to check it."
                 )
+
             # The old channel was deleted manually; clear the stale setting.
             await self.bot.db.execute(
                 "DELETE FROM onyx_honeypot WHERE guild_id=?",
@@ -58,10 +97,12 @@ class Honeypot(commands.Cog):
             )
 
         safe_name = "-".join(channel_name.lower().split())[:90]
+
         if not safe_name:
             safe_name = "dont-type-here"
 
         bot_member = ctx.guild.me
+
         overwrites = {
             ctx.guild.default_role: discord.PermissionOverwrite(
                 view_channel=True,
@@ -93,10 +134,12 @@ class Honeypot(commands.Cog):
                 overwrites=overwrites,
                 reason=f"Honeypot created by {ctx.author} ({ctx.author.id})"
             )
+
         except discord.Forbidden:
             return await ctx.send(
                 "I couldn't create the channel. Check ONYX's Manage Channels permission."
             )
+
         except discord.HTTPException:
             return await ctx.send("Discord couldn't create the honeypot channel.")
 
@@ -120,79 +163,119 @@ class Honeypot(commands.Cog):
             ),
             color=discord.Color.dark_teal()
         )
+
         embed.set_footer(text="ONYX Security • Honeypot")
+
         await channel.send(
             embed=embed,
             allowed_mentions=discord.AllowedMentions.none()
         )
+
         await ctx.send(f"Honeypot created and activated: {channel.mention}")
 
     @honeypot.command(name="status")
     @commands.has_guild_permissions(manage_guild=True)
     async def status(self, ctx):
         config = await self.get_config(ctx.guild.id)
+
         if not config:
-            return await ctx.send("No honeypot is configured. Use `,honeypot create`.")
+            return await ctx.send(
+                "No honeypot is configured. Use `,honeypot create`."
+            )
 
         channel = ctx.guild.get_channel(int(config["channel_id"]))
+
         if channel is None:
             return await ctx.send(
                 "The saved honeypot channel no longer exists. "
                 "Run `,honeypot create` to replace it."
             )
 
+        globally_enabled = await self.security_enabled()
+
         embed = discord.Embed(
             title="ONYX Honeypot Status",
             color=discord.Color.dark_teal()
         )
-        embed.add_field(name="Channel", value=channel.mention, inline=False)
+
+        embed.add_field(
+            name="Channel",
+            value=channel.mention,
+            inline=False
+        )
+
         embed.add_field(
             name="Accounts caught",
             value=str(config["caught_count"]),
             inline=True
         )
-        embed.add_field(name="Protection", value="Active", inline=True)
+
+        embed.add_field(
+            name="Protection",
+            value="Active" if globally_enabled else "Paused globally",
+            inline=True
+        )
+
         await ctx.send(embed=embed)
 
     @honeypot.command(name="delete")
     @commands.has_guild_permissions(manage_guild=True)
     async def delete(self, ctx):
         config = await self.get_config(ctx.guild.id)
+
         if not config:
-            return await ctx.send("There is no active honeypot to remove.")
+            return await ctx.send(
+                "There is no active honeypot to remove."
+            )
 
         channel = ctx.guild.get_channel(int(config["channel_id"]))
+
         await self.bot.db.execute(
             "DELETE FROM onyx_honeypot WHERE guild_id=?",
             (ctx.guild.id,)
         )
+
         if channel:
             try:
-                await channel.delete(reason=f"Honeypot removed by {ctx.author}")
+                await channel.delete(
+                    reason=f"Honeypot removed by {ctx.author}"
+                )
+
             except discord.Forbidden:
                 await ctx.send(
                     "Honeypot monitoring is disabled, but I couldn't delete "
                     "the channel. Remove it manually."
                 )
                 return
+
             except discord.HTTPException:
                 await ctx.send(
                     "Honeypot monitoring is disabled, but Discord couldn't "
                     "delete the channel. Remove it manually."
                 )
                 return
-        await ctx.send("Honeypot disabled and its channel removed, if it existed.")
+
+        await ctx.send(
+            "Honeypot disabled and its channel removed, if it existed."
+        )
 
     @commands.Cog.listener()
     async def on_message(self, message):
         if not message.guild or message.author.bot:
             return
 
+        # Global Security OFF pauses honeypot enforcement.
+        # The saved channel and caught count remain untouched.
+        if not await self.security_enabled():
+            return
+
         config = await self.get_config(message.guild.id)
+
         if not config or message.channel.id != int(config["channel_id"]):
             return
 
         member = message.author
+
         # Protect the server owner and moderators from accidental messages.
         if (
             member.id == message.guild.owner_id
@@ -204,6 +287,7 @@ class Honeypot(commands.Cog):
                 await message.delete()
             except discord.HTTPException:
                 pass
+
             return
 
         try:
@@ -212,6 +296,7 @@ class Honeypot(commands.Cog):
             pass
 
         reason = "Posted a message in the server's honeypot channel."
+
         try:
             await message.guild.ban(
                 member,
@@ -219,12 +304,14 @@ class Honeypot(commands.Cog):
                 delete_message_seconds=0
             )
             caught = True
+
         except (discord.Forbidden, discord.HTTPException):
             caught = False
 
         if caught:
             await self.bot.db.execute(
-                "UPDATE onyx_honeypot SET caught_count=caught_count+1 WHERE guild_id=?",
+                "UPDATE onyx_honeypot "
+                "SET caught_count=caught_count+1 WHERE guild_id=?",
                 (message.guild.id,)
             )
 
@@ -233,9 +320,13 @@ class Honeypot(commands.Cog):
             "SELECT log_channel_id FROM guild_settings WHERE guild_id=?",
             (message.guild.id,)
         )
+
         log_channel = None
+
         if settings and settings["log_channel_id"]:
-            log_channel = message.guild.get_channel(int(settings["log_channel_id"]))
+            log_channel = message.guild.get_channel(
+                int(settings["log_channel_id"])
+            )
 
         if log_channel:
             embed = discord.Embed(
@@ -243,10 +334,16 @@ class Honeypot(commands.Cog):
                 description=(
                     f"**Account:** {member} (`{member.id}`)\n"
                     f"**Channel:** {message.channel.mention}\n"
-                    f"**Action:** {'Banned' if caught else 'Ban failed — check permissions/role hierarchy'}"
+                    f"**Action:** "
+                    f"{'Banned' if caught else 'Ban failed — check permissions/role hierarchy'}"
                 ),
-                color=discord.Color.red() if caught else discord.Color.orange()
+                color=(
+                    discord.Color.red()
+                    if caught
+                    else discord.Color.orange()
+                )
             )
+
             try:
                 await log_channel.send(
                     embed=embed,
