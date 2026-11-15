@@ -1,3 +1,4 @@
+
 import os
 import io
 import json
@@ -36,6 +37,7 @@ def discover_cog_extensions():
         extensions.append(".".join(relative_path.parts))
 
     return sorted(set(extensions))
+
 
 intents = discord.Intents.default()
 intents.members = True
@@ -117,9 +119,6 @@ bot = CommunityBot()
 @bot.event
 async def on_ready():
     log.info("Logged in as %s (%s)", bot.user, bot.user.id)
-    await bot.change_presence(activity=discord.Activity(
-        type=discord.ActivityType.watching, name=",help • your server"
-    ))
 
 
 def build_alias_lookup():
