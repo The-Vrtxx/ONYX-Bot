@@ -199,7 +199,7 @@ async def cors_and_security(request, handler):
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         response.headers["Access-Control-Allow-Methods"] = (
-            "GET, POST, PATCH, OPTIONS"
+            "GET, POST, PUT, PATCH, OPTIONS"
         )
         response.headers["Vary"] = "Origin"
 
