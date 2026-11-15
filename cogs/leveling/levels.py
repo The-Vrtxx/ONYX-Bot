@@ -1,3 +1,4 @@
+
 """ONYX global leveling, Prestige progression, and Prestige Master titles.
 
 Progression is global by Discord user ID. XP earning has one shared rate and
@@ -24,10 +25,12 @@ MAX_PRESTIGE = 10
 MAX_MASTER_LEVEL = 1000
 PRESTIGE_TOKEN_REWARD = 10
 
-# One global earning policy. These values are not configurable per server.
+# Fallback values. The owner dashboard controls the active global settings.
 GLOBAL_MIN_XP = 15
 GLOBAL_MAX_XP = 25
 GLOBAL_XP_COOLDOWN = 60
+
+SETTINGS_CACHE_SECONDS = 15
 
 MASTER_TITLES = {
     25: "Veteran",
@@ -216,10 +219,21 @@ class ConfirmGlobalResetView(discord.ui.View):
 class Levels(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
         # Keyed only by Discord user ID: the cooldown is shared across servers.
         self.cooldowns = {}
+
         self._xp_lock = asyncio.Lock()
         self._prestige_lock = asyncio.Lock()
+
+        # Cached global owner-dashboard settings.
+        self._leveling_settings = {
+            "min_xp": GLOBAL_MIN_XP,
+            "max_xp": GLOBAL_MAX_XP,
+            "cooldown_seconds": GLOBAL_XP_COOLDOWN,
+        }
+        self._settings_loaded_at = 0
+        self._settings_lock = asyncio.Lock()
 
     async def cog_load(self):
         # These are the established global tables used by the website and shop.
@@ -253,6 +267,27 @@ class Levels(commands.Cog):
             )
         """)
 
+        # Shared owner-dashboard settings table.
+        # TIMESTAMP is compatible with both PostgreSQL and SQLite.
+        await self.bot.db.execute("""
+            CREATE TABLE IF NOT EXISTS onyx_global_level_settings (
+                id INTEGER PRIMARY KEY,
+                min_xp INTEGER NOT NULL DEFAULT 15,
+                max_xp INTEGER NOT NULL DEFAULT 25,
+                cooldown_seconds INTEGER NOT NULL DEFAULT 60,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_by BIGINT
+            )
+        """)
+
+        await self.bot.db.execute("""
+            INSERT INTO onyx_global_level_settings (
+                id, min_xp, max_xp, cooldown_seconds
+            )
+            VALUES (1, 15, 25, 60)
+            ON CONFLICT(id) DO NOTHING
+        """)
+
         # Keep the pre-existing migration marker behavior. No global progress
         # reset or destructive migration is performed by this cog.
         await self.bot.db.execute("""
@@ -266,6 +301,60 @@ class Levels(commands.Cog):
             "ON CONFLICT(migration_key) DO NOTHING",
             ("global_levels_reset_v1",),
         )
+
+        # Load the current dashboard settings once during startup.
+        await self.get_leveling_settings(force=True)
+
+    async def get_leveling_settings(self, force=False):
+        """Read owner-configured global XP settings with a short cache."""
+        now = time.monotonic()
+
+        if (
+            not force
+            and now - self._settings_loaded_at < SETTINGS_CACHE_SECONDS
+        ):
+            return self._leveling_settings
+
+        async with self._settings_lock:
+            now = time.monotonic()
+
+            if (
+                not force
+                and now - self._settings_loaded_at < SETTINGS_CACHE_SECONDS
+            ):
+                return self._leveling_settings
+
+            try:
+                row = await self.bot.db.fetchone("""
+                    SELECT min_xp, max_xp, cooldown_seconds
+                    FROM onyx_global_level_settings
+                    WHERE id=1
+                """)
+
+                if row is not None:
+                    minimum = int(row["min_xp"])
+                    maximum = int(row["max_xp"])
+                    cooldown = int(row["cooldown_seconds"])
+
+                    # Validate database values before using them.
+                    if (
+                        1 <= minimum <= maximum <= 1000
+                        and 5 <= cooldown <= 86400
+                    ):
+                        self._leveling_settings = {
+                            "min_xp": minimum,
+                            "max_xp": maximum,
+                            "cooldown_seconds": cooldown,
+                        }
+
+                self._settings_loaded_at = now
+
+            except Exception:
+                # Keep the last known good settings or safe defaults.
+                # Retry after the cache interval.
+                self._settings_loaded_at = 0
+
+        return self._leveling_settings
 
     async def profile(self, user_id: int):
         row = await self.bot.db.fetchone(
@@ -439,15 +528,20 @@ class Levels(commands.Cog):
         except Exception:
             pass
 
+        # Pull the current global policy from the owner dashboard.
+        settings = await self.get_leveling_settings()
+
         user_id = message.author.id
         now = time.monotonic()
-        if now - self.cooldowns.get(user_id, 0) < GLOBAL_XP_COOLDOWN:
+
+        if now - self.cooldowns.get(user_id, 0) < settings["cooldown_seconds"]:
             return
 
         # Reserve the cooldown before the database operation so simultaneous
         # messages from the same user cannot award XP in two servers at once.
         self.cooldowns[user_id] = now
-        gained = random.randint(GLOBAL_MIN_XP, GLOBAL_MAX_XP)
+        gained = random.randint(settings["min_xp"], settings["max_xp"])
+
         try:
             _, new, gained_levels = await self.add_xp(user_id, gained)
         except Exception:
