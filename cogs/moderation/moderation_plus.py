@@ -1,11 +1,48 @@
+
+import json
+
 import discord
 from discord.ext import commands
 
 
+async def moderation_feature_check(bot, ctx):
+    """Return whether global moderation commands are enabled."""
+    if await bot.is_owner(ctx.author):
+        return True
+
+    try:
+        row = await bot.db.fetchone(
+            "SELECT features FROM onyx_global_system_settings WHERE id=1"
+        )
+        if not row:
+            return True
+
+        features = row["features"]
+        if isinstance(features, str):
+            features = json.loads(features)
+
+        if not isinstance(features, dict):
+            return True
+
+        enabled = features.get("moderation", True)
+        if isinstance(enabled, bool) and not enabled:
+            await ctx.send("Moderation is currently disabled globally by ONYX.")
+            return False
+
+    except Exception:
+        return True
+
+    return True
+
+
 class ModerationPlus(commands.Cog):
     """Additional moderation tools that complement the existing moderation cog."""
+
     def __init__(self, bot):
         self.bot = bot
+
+    async def cog_check(self, ctx):
+        return await moderation_feature_check(self.bot, ctx)
 
     @commands.command(name="modnote", help="Save a private staff note about a member.")
     @commands.has_permissions(moderate_members=True)
@@ -103,6 +140,9 @@ class MuteSetup(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    async def cog_check(self, ctx):
+        return await moderation_feature_check(self.bot, ctx)
+
     async def cog_load(self):
         await self.bot.db.execute(
             """
@@ -130,12 +170,9 @@ class MuteSetup(commands.Cog):
             saved_id = config[details["column"]] if config else None
             role = guild.get_role(int(saved_id)) if saved_id else None
 
-            # If the stored role was deleted, try the expected role name.
             if role is None:
                 role = discord.utils.get(guild.roles, name=details["name"])
 
-            # If neither the saved role nor a role with the expected name exists,
-            # recreate it and remember that it was newly created.
             if role is None:
                 role = await guild.create_role(
                     name=details["name"],
