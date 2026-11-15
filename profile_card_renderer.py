@@ -1,4 +1,3 @@
-
 """Shared ONYX profile-card renderer for Discord and the website."""
 
 from io import BytesIO
@@ -48,11 +47,9 @@ def _refresh_remote_prestige_badges():
 
         refreshed = {}
         valid_ids = {f"prestige_{i}" for i in range(11)} | {"prestige_master"}
-
         for emblem in payload["emblems"]:
             if not isinstance(emblem, dict):
                 continue
-
             item_id = str(emblem.get("item_id", "")).strip().lower()
             image_url = str(emblem.get("image_url", "")).strip()
 
@@ -71,14 +68,11 @@ def _refresh_remote_prestige_badges():
                     image_url,
                     headers={"User-Agent": "ONYX-Discord-Bot/1.0"}
                 )
-
                 with urlopen(image_request, timeout=5) as response:
                     image_data = response.read()
-
                 with Image.open(BytesIO(image_data)) as source:
                     source.load()
                     refreshed[item_id] = source.convert("RGBA").copy()
-
             except Exception:
                 # A failed download must not cause a local-file fallback.
                 continue
@@ -152,7 +146,7 @@ def _get_cosmetic_asset(category, item_id):
     asset_id = f"{category}:{item_id}"
     now = time.time()
 
-    with _cosmetic_asset_cache_lock:
+    with _cosmetic_cache_lock:
         cached = _cosmetic_asset_cache.get(asset_id)
 
         if cached:
@@ -180,7 +174,7 @@ def _get_cosmetic_asset(category, item_id):
     except Exception:
         image = None
 
-    with _cosmetic_asset_cache_lock:
+    with _cosmetic_cache_lock:
         _cosmetic_asset_cache[asset_id] = (
             now,
             image.copy() if image else None,
