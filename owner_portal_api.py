@@ -201,7 +201,7 @@ async def _ensure_asset_media_table(conn):
 
 
 async def _ensure_runtime_health_table(conn):
-    """Create the runtime health table if it does not exist."""
+    """Create and update the runtime health table."""
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS onyx_bot_runtime_health (
             id INTEGER PRIMARY KEY,
@@ -211,8 +211,20 @@ async def _ensure_runtime_health_table(conn):
             guild_count BIGINT NOT NULL DEFAULT 0,
             member_count BIGINT NOT NULL DEFAULT 0,
             loaded_cogs TEXT NOT NULL DEFAULT '[]',
+            discovered_cogs TEXT NOT NULL DEFAULT '[]',
+            failed_cogs TEXT NOT NULL DEFAULT '[]',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+    """)
+
+    await conn.execute("""
+        ALTER TABLE onyx_bot_runtime_health
+        ADD COLUMN IF NOT EXISTS discovered_cogs TEXT NOT NULL DEFAULT '[]'
+    """)
+
+    await conn.execute("""
+        ALTER TABLE onyx_bot_runtime_health
+        ADD COLUMN IF NOT EXISTS failed_cogs TEXT NOT NULL DEFAULT '[]'
     """)
 
 
@@ -263,7 +275,7 @@ def register_owner_routes(app, require_user, bot_owner_id):
             row = await conn.fetchrow("""
                 SELECT status, database_status, uptime_seconds,
                        guild_count, member_count, loaded_cogs,
-                       updated_at
+                       discovered_cogs, failed_cogs, updated_at
                 FROM onyx_bot_runtime_health
                 WHERE id=1
             """)
@@ -278,6 +290,10 @@ def register_owner_routes(app, require_user, bot_owner_id):
                 "member_count": 0,
                 "loaded_cogs": [],
                 "loaded_cog_count": 0,
+                "discovered_cogs": [],
+                "discovered_cog_count": 0,
+                "failed_cogs": [],
+                "failed_cog_count": 0,
                 "last_heartbeat": None,
                 "heartbeat_age_seconds": None,
                 "message": "No bot heartbeat has been received yet."
@@ -307,6 +323,22 @@ def register_owner_routes(app, require_user, bot_owner_id):
         if not isinstance(loaded_cogs, list):
             loaded_cogs = []
 
+        try:
+            discovered_cogs = json.loads(row["discovered_cogs"] or "[]")
+        except (TypeError, ValueError):
+            discovered_cogs = []
+
+        if not isinstance(discovered_cogs, list):
+            discovered_cogs = []
+
+        try:
+            failed_cogs = json.loads(row["failed_cogs"] or "[]")
+        except (TypeError, ValueError):
+            failed_cogs = []
+
+        if not isinstance(failed_cogs, list):
+            failed_cogs = []
+
         return web.json_response({
             "bot_status": "online" if bot_online else "offline",
             "database_status": row["database_status"],
@@ -316,6 +348,10 @@ def register_owner_routes(app, require_user, bot_owner_id):
             "member_count": int(row["member_count"] or 0),
             "loaded_cogs": loaded_cogs,
             "loaded_cog_count": len(loaded_cogs),
+            "discovered_cogs": discovered_cogs,
+            "discovered_cog_count": len(discovered_cogs),
+            "failed_cogs": failed_cogs,
+            "failed_cog_count": len(failed_cogs),
             "last_heartbeat": (
                 updated_at.isoformat() if updated_at else None
             ),
@@ -478,7 +514,7 @@ def register_owner_routes(app, require_user, bot_owner_id):
 
         if deleted is None:
             return web.json_response(
-                {"error": "That user is not on the ONYX developer team."},
+                {"error": "That user is not an ONYX developer."},
                 status=404
             )
 
