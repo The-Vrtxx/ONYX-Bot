@@ -1,47 +1,183 @@
+
 import discord
+import json
 from discord.ext import commands
 
+
+async def welcome_globally_enabled(bot):
+    """Check the global Welcome feature setting."""
+    try:
+        row = await bot.db.fetchone(
+            "SELECT features FROM onyx_global_system_settings WHERE id=1"
+        )
+
+        if not row or not row["features"]:
+            return True
+
+        features = row["features"]
+
+        if isinstance(features, str):
+            features = json.loads(features)
+
+        if isinstance(features, dict):
+            enabled = features.get("welcome", True)
+            if isinstance(enabled, bool):
+                return enabled
+
+    except Exception:
+        pass
+
+    # Fail open if the settings database is unavailable.
+    return True
+
+
 class Welcome(commands.Cog):
-    def __init__(self, bot): self.bot = bot
+    def __init__(self, bot):
+        self.bot = bot
 
-    @commands.command(name="welcome_set", help="Set welcome channel and message.")
+    async def cog_check(self, ctx):
+        """Block configuration commands when Welcome is disabled."""
+        if await self.bot.is_owner(ctx.author):
+            return True
+
+        if not await welcome_globally_enabled(self.bot):
+            await ctx.send("ONYX Welcome is currently disabled globally.")
+            return False
+
+        return True
+
+    @commands.command(
+        name="welcome_set",
+        help="Set welcome channel and message."
+    )
     @commands.has_permissions(manage_guild=True)
-    async def set_welcome(self, ctx: commands.Context, channel: discord.TextChannel, *, message: str):
+    async def set_welcome(
+        self,
+        ctx: commands.Context,
+        channel: discord.TextChannel,
+        *,
+        message: str
+    ):
         if len(message) > 1500:
-            return await ctx.send("Keep the message under 1500 characters.",)
+            return await ctx.send(
+                "Keep the message under 1500 characters."
+            )
+
         await self.bot.db.execute(
-            """INSERT INTO guild_settings (guild_id,welcome_channel_id,welcome_message)
-            VALUES (?,?,?) ON CONFLICT(guild_id) DO UPDATE SET
-            welcome_channel_id=excluded.welcome_channel_id,welcome_message=excluded.welcome_message""",
-            (ctx.guild.id, channel.id, message))
-        await ctx.send("Welcome message saved. Available placeholders: `{mention}`, `{user}`, `{server}`, `{count}`.",)
+            """
+            INSERT INTO guild_settings (
+                guild_id,
+                welcome_channel_id,
+                welcome_message
+            )
+            VALUES (?, ?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                welcome_channel_id=excluded.welcome_channel_id,
+                welcome_message=excluded.welcome_message
+            """,
+            (ctx.guild.id, channel.id, message)
+        )
 
-    @commands.command(name="goodbye_set", help="Set the goodbye message.")
+        await ctx.send(
+            "Welcome message saved. Available placeholders: "
+            "`{mention}`, `{user}`, `{server}`, `{count}`."
+        )
+
+    @commands.command(
+        name="goodbye_set",
+        help="Set the goodbye message."
+    )
     @commands.has_permissions(manage_guild=True)
-    async def set_goodbye(self, ctx: commands.Context, *, message: str):
+    async def set_goodbye(
+        self,
+        ctx: commands.Context,
+        *,
+        message: str
+    ):
         if len(message) > 1500:
-            return await ctx.send("Keep the message under 1500 characters.",)
-        await self.bot.db.execute("INSERT INTO guild_settings (guild_id,goodbye_message) VALUES (?,?) ON CONFLICT(guild_id) DO UPDATE SET goodbye_message=excluded.goodbye_message", (ctx.guild.id, message))
-        await ctx.send("Goodbye message saved. Placeholders: `{user}`, `{server}`.",)
+            return await ctx.send(
+                "Keep the message under 1500 characters."
+            )
+
+        await self.bot.db.execute(
+            """
+            INSERT INTO guild_settings (
+                guild_id,
+                goodbye_message
+            )
+            VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                goodbye_message=excluded.goodbye_message
+            """,
+            (ctx.guild.id, message)
+        )
+
+        await ctx.send(
+            "Goodbye message saved. Placeholders: `{user}`, `{server}`."
+        )
 
     @commands.Cog.listener()
     async def on_member_join(self, member):
-        row = await self.bot.db.fetchone("SELECT welcome_channel_id,welcome_message FROM guild_settings WHERE guild_id=?", (member.guild.id,))
+        if not await welcome_globally_enabled(self.bot):
+            return
+
+        row = await self.bot.db.fetchone(
+            """
+            SELECT welcome_channel_id, welcome_message
+            FROM guild_settings
+            WHERE guild_id=?
+            """,
+            (member.guild.id,)
+        )
+
         if row and row["welcome_channel_id"]:
-            channel = member.guild.get_channel(row["welcome_channel_id"])
+            channel = member.guild.get_channel(
+                row["welcome_channel_id"]
+            )
+
             if channel:
-                msg = row["welcome_message"].format(mention=member.mention, user=str(member), server=member.guild.name, count=member.guild.member_count or 0)
-                try: await channel.send(msg)
-                except discord.HTTPException: pass
+                message = row["welcome_message"].format(
+                    mention=member.mention,
+                    user=str(member),
+                    server=member.guild.name,
+                    count=member.guild.member_count or 0
+                )
+
+                try:
+                    await channel.send(message)
+                except discord.HTTPException:
+                    pass
 
     @commands.Cog.listener()
     async def on_member_remove(self, member):
-        row = await self.bot.db.fetchone("SELECT welcome_channel_id,goodbye_message FROM guild_settings WHERE guild_id=?", (member.guild.id,))
-        if row and row["welcome_channel_id"]:
-            channel = member.guild.get_channel(row["welcome_channel_id"])
-            if channel:
-                msg = row["goodbye_message"].format(user=str(member), server=member.guild.name)
-                try: await channel.send(msg)
-                except discord.HTTPException: pass
+        if not await welcome_globally_enabled(self.bot):
+            return
 
-async def setup(bot): await bot.add_cog(Welcome(bot))
+        row = await self.bot.db.fetchone(
+            """
+            SELECT welcome_channel_id, goodbye_message
+            FROM guild_settings
+            WHERE guild_id=?
+            """,
+            (member.guild.id,)
+        )
+
+        if row and row["welcome_channel_id"]:
+            channel = member.guild.get_channel(
+                row["welcome_channel_id"]
+            )
+
+            if channel:
+                message = row["goodbye_message"].format(
+                    user=str(member),
+                    server=member.guild.name
+                )
+
+                try:
+                    await channel.send(message)
+                except discord.HTTPException:
+                    pass
+
+
+async def setup(bot):
+    await bot.add_cog(Welcome(bot))
