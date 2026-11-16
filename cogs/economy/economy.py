@@ -65,12 +65,21 @@ def money(amount):
     return f"{int(amount):,} Credits"
 
 
+
 def make_embed(title, description, color=COLOR):
-    return discord.Embed(
+    embed = discord.Embed(
         title=title,
         description=description,
         color=color,
+        timestamp=datetime.now(timezone.utc),
     )
+
+    embed.set_footer(
+        text="ONYX • GLOBAL ECONOMY"
+    )
+
+    return embed
+
 
 
 async def settings_for(bot):
