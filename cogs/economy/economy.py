@@ -1,7 +1,6 @@
 
 """ONYX global Credits economy and arcade games."""
 
-import asyncio
 import random
 import uuid
 from datetime import datetime, timezone
@@ -17,11 +16,30 @@ from currency_system import (
     spend_credits,
 )
 
+from cogs.economy._common import (
+    make_embed,
+    money,
+    pay_out,
+    place_wager,
+)
+
+from cogs.economy.games._blackjack import BlackjackView
+from cogs.economy.games._quick_games import QuickGameView
+from cogs.economy.games._slots import SlotsView
+from cogs.economy.games._manager import ArcadeManager
+from cogs.economy.games._streak_views import StreakDecisionView
+from cogs.economy.games._streaks import (
+    ensure_streak_tables,
+    create_streak,
+    get_streak,
+)
+
 COLOR = discord.Color.from_rgb(25, 190, 190)
-SLOT_SYMBOLS = ("🍒", "🍋", "🍇", "🔔", "💎", "7️⃣")
 
 
 async def ensure_economy_tables(pool):
+    """Create the global economy tables."""
+
     await ensure_currency_tables(pool)
 
     async with pool.acquire() as conn:
@@ -48,7 +66,8 @@ async def ensure_economy_tables(pool):
 
         await conn.execute("""
             INSERT INTO onyx_economy_settings (id)
-            VALUES (1) ON CONFLICT (id) DO NOTHING
+            VALUES (1)
+            ON CONFLICT (id) DO NOTHING
         """)
 
         await conn.execute("""
@@ -59,27 +78,6 @@ async def ensure_economy_tables(pool):
                 PRIMARY KEY (user_id, action)
             )
         """)
-
-
-def money(amount):
-    return f"{int(amount):,} Credits"
-
-
-
-def make_embed(title, description, color=COLOR):
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=color,
-        timestamp=datetime.now(timezone.utc),
-    )
-
-    embed.set_footer(
-        text="ONYX • GLOBAL ECONOMY"
-    )
-
-    return embed
-
 
 
 async def settings_for(bot):
@@ -131,678 +129,19 @@ async def claim_reward(bot, user_id, action, amount, cooldown):
             return True, amount
 
 
-async def place_wager(bot, user_id, amount, source):
-    if amount <= 0 or amount > MAX_CREDITS:
-        return {
-            "ok": False,
-            "error": "Enter a valid positive wager.",
-        }
-
-    async with bot.db.pool.acquire() as conn:
-        async with conn.transaction():
-            settings = await conn.fetchrow("""
-                SELECT min_bet, max_bet, enabled
-                FROM onyx_economy_settings WHERE id=1
-            """)
-
-            if not settings or not settings["enabled"]:
-                return {
-                    "ok": False,
-                    "error": "The ONYX economy is disabled.",
-                }
-
-            if amount < settings["min_bet"] or amount > settings["max_bet"]:
-                return {
-                    "ok": False,
-                    "error": (
-                        f"Bets must be between {settings['min_bet']:,} "
-                        f"and {settings['max_bet']:,} Credits."
-                    ),
-                }
-
-            return await spend_credits(
-                conn,
-                user_id,
-                amount,
-                source,
-                "ONYX Arcade wager",
-            )
-
-
-async def pay_out(bot, user_id, amount, source, reference):
-    if amount <= 0:
-        return
-
-    async with bot.db.pool.acquire() as conn:
-        async with conn.transaction():
-            return await grant_credits(
-                conn,
-                user_id,
-                amount,
-                source=source,
-                description="ONYX Arcade payout",
-                reference_id=str(reference),
-            )
-
-
-class PlayerView(discord.ui.View):
-    """Restricts game controls to the member who placed the wager."""
-
-    def __init__(
-        self,
-        bot,
-        user_id,
-        bet,
-        game,
-        reference,
-        timeout=60,
-    ):
-        super().__init__(timeout=timeout)
-
-        self.bot = bot
-        self.user_id = user_id
-        self.bet = bet
-        self.game = game
-        self.reference = reference
-        self.finished = False
-
-    async def interaction_check(self, interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "This game belongs to another player.",
-                ephemeral=True,
-            )
-            return False
-
-        if self.finished:
-            await interaction.response.send_message(
-                "This game has already ended.",
-                ephemeral=True,
-            )
-            return False
-
-        return True
-
-    async def refund(self):
-        if self.finished:
-            return
-
-        self.finished = True
-
-        await pay_out(
-            self.bot,
-            self.user_id,
-            self.bet,
-            f"{self.game}_refund",
-            self.reference,
-        )
-
-        for child in self.children:
-            child.disabled = True
-
-    async def on_timeout(self):
-        try:
-            await self.refund()
-        except Exception:
-            pass
-
-
-class BetChoiceView(PlayerView):
-
-    def __init__(self, bot, user_id, bet, game, reference):
-        super().__init__(bot, user_id, bet, game, reference)
-
-    async def settle(self, interaction, choice):
-        if self.game == "betflip":
-            result = random.choice(("heads", "tails"))
-            won = choice == result
-            result_text = result.title()
-        else:
-            result = random.randint(1, 6)
-            won = result >= 4 if choice == "high" else result <= 3
-            result_text = str(result)
-
-        self.finished = True
-
-        for child in self.children:
-            child.disabled = True
-
-        if won:
-            payout = self.bet * 2
-
-            await pay_out(
-                self.bot,
-                self.user_id,
-                payout,
-                f"{self.game}_payout",
-                self.reference,
-            )
-
-            message = (
-                f"🎉 You won **{money(payout)}**!\n"
-                f"Result: **{result_text}**"
-            )
-        else:
-            message = (
-                f"You lost **{money(self.bet)}**.\n"
-                f"Result: **{result_text}**"
-            )
-
-        await interaction.response.edit_message(
-            embed=make_embed(
-                f"ONYX {self.game.title()}",
-                message,
-            ),
-            view=self,
-        )
-
-    @discord.ui.button(
-        label="Heads",
-        style=discord.ButtonStyle.primary,
-    )
-    async def heads(self, interaction, button):
-        if self.game != "betflip":
-            return await interaction.response.send_message(
-                "That choice isn't available in this game.",
-                ephemeral=True,
-            )
-
-        await self.settle(interaction, "heads")
-
-    @discord.ui.button(
-        label="Tails",
-        style=discord.ButtonStyle.primary,
-    )
-    async def tails(self, interaction, button):
-        if self.game != "betflip":
-            return await interaction.response.send_message(
-                "That choice isn't available in this game.",
-                ephemeral=True,
-            )
-
-        await self.settle(interaction, "tails")
-
-    @discord.ui.button(
-        label="High (4–6)",
-        style=discord.ButtonStyle.success,
-        row=1,
-    )
-    async def high(self, interaction, button):
-        if self.game != "dice":
-            return await interaction.response.send_message(
-                "That choice isn't available in this game.",
-                ephemeral=True,
-            )
-
-        await self.settle(interaction, "high")
-
-    @discord.ui.button(
-        label="Low (1–3)",
-        style=discord.ButtonStyle.secondary,
-        row=1,
-    )
-    async def low(self, interaction, button):
-        if self.game != "dice":
-            return await interaction.response.send_message(
-                "That choice isn't available in this game.",
-                ephemeral=True,
-            )
-
-        await self.settle(interaction, "low")
-
-
-class SlotsView(PlayerView):
-    """Animated ONYX slot machine."""
-
-    SPIN_FRAMES = 5
-    FRAME_DELAY = 0.45
-    STOP_DELAY = 0.55
-
-    def __init__(self, bot, user_id, bet, reference):
-        super().__init__(
-            bot,
-            user_id,
-            bet,
-            "slots",
-            reference,
-            timeout=90,
-        )
-        self.spinning = False
-
-    def slot_embed(self, reels, status=""):
-        display = "　|　".join(
-            f"**{symbol}**" for symbol in reels
-        )
-
-        embed = make_embed(
-            "🎰 ONYX ARCADE SLOTS",
-            (
-                f"**Wager:** {money(self.bet)}\n\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                f"# {display}\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"{status}"
-            ),
-        )
-
-        embed.set_footer(
-            text="ONYX Arcade • Slot Machine"
-        )
-
-        return embed
-
-    @discord.ui.button(
-        label="Spin",
-        emoji="🎰",
-        style=discord.ButtonStyle.success,
-    )
-    async def spin(self, interaction, button):
-        if self.spinning or self.finished:
-            return await interaction.response.send_message(
-                "This slot machine is already spinning or finished.",
-                ephemeral=True,
-            )
-
-        self.spinning = True
-
-        # Determine the result before the animation begins.
-        final_reels = [
-            random.choice(SLOT_SYMBOLS)
-            for _ in range(3)
-        ]
-
-        if final_reels == ["7️⃣", "7️⃣", "7️⃣"]:
-            multiplier = 10
-        elif len(set(final_reels)) == 1:
-            multiplier = 5
-        elif len(set(final_reels)) == 2:
-            multiplier = 2
-        else:
-            multiplier = 0
-
-        # Lock the game against repeat spins.
-        self.finished = True
-        button.disabled = True
-
-        await interaction.response.edit_message(
-            embed=self.slot_embed(
-                ["❔", "❔", "❔"],
-                "🎰 **Spinning...**",
-            ),
-            view=self,
-        )
-
-        # Animate the reels.
-        for _ in range(self.SPIN_FRAMES):
-            animated_reels = [
-                random.choice(SLOT_SYMBOLS)
-                for _ in range(3)
-            ]
-
-            await interaction.edit_original_response(
-                embed=self.slot_embed(
-                    animated_reels,
-                    "🎰 **Reels spinning...**",
-                ),
-                view=self,
-            )
-
-            await asyncio.sleep(self.FRAME_DELAY)
-
-        # Reveal the predetermined result one reel at a time.
-        displayed_reels = [
-            random.choice(SLOT_SYMBOLS)
-            for _ in range(3)
-        ]
-
-        for stopped in range(1, 4):
-            displayed_reels[stopped - 1] = final_reels[stopped - 1]
-
-            status = (
-                f"🎰 **Reel {stopped} stopped!**"
-                if stopped < 3
-                else "🎰 **All reels stopped!**"
-            )
-
-            await interaction.edit_original_response(
-                embed=self.slot_embed(
-                    displayed_reels,
-                    status,
-                ),
-                view=self,
-            )
-
-            await asyncio.sleep(self.STOP_DELAY)
-
-        # Pay the result selected before the animation.
-        if multiplier:
-            winnings = self.bet * multiplier
-
-            await pay_out(
-                self.bot,
-                self.user_id,
-                winnings,
-                "slots_payout",
-                self.reference,
-            )
-
-            result = (
-                f"🎉 **YOU WON!**\n\n"
-                f"Multiplier: **{multiplier}x**\n"
-                f"Payout: **{money(winnings)}**"
-            )
-
-            color = discord.Color.gold()
-
-        else:
-            result = (
-                f"❌ **No win this time.**\n\n"
-                f"You lost **{money(self.bet)}**."
-            )
-
-            color = discord.Color.red()
-
-        final_embed = self.slot_embed(
-            final_reels,
-            result,
-        )
-
-        final_embed.color = color
-
-        await interaction.edit_original_response(
-            embed=final_embed,
-            view=self,
-        )
-
-
-class BlackjackView(PlayerView):
-    """Native Discord embed blackjack game."""
-
-    SUITS = ("♠", "♥", "♦", "♣")
-
-    RANKS = (
-        ("2", 2),
-        ("3", 3),
-        ("4", 4),
-        ("5", 5),
-        ("6", 6),
-        ("7", 7),
-        ("8", 8),
-        ("9", 9),
-        ("10", 10),
-        ("J", 10),
-        ("Q", 10),
-        ("K", 10),
-        ("A", 11),
-    )
-
-    def __init__(
-        self,
-        bot,
-        user_id,
-        bet,
-        reference,
-        player,
-        dealer,
-    ):
-        super().__init__(
-            bot,
-            user_id,
-            bet,
-            "blackjack",
-            reference,
-            timeout=90,
-        )
-
-        self.player = player
-        self.dealer = dealer
-
-    @classmethod
-    def draw(cls):
-        rank, value = random.choice(cls.RANKS)
-        suit = random.choice(cls.SUITS)
-        return (rank, value, suit)
-
-    @staticmethod
-    def total(hand):
-        total = sum(card[1] for card in hand)
-        aces = sum(
-            1 for card in hand
-            if card[0] == "A"
-        )
-
-        while total > 21 and aces:
-            total -= 10
-            aces -= 1
-
-        return total
-
-    @staticmethod
-    def format_hand(hand, hide_second=False):
-        tick = chr(96)
-        displayed = []
-
-        for index, card in enumerate(hand):
-            if hide_second and index == 1:
-                displayed.append(f"{tick}[ ?? ]{tick}")
-            else:
-                rank, _value, suit = card
-                displayed.append(
-                    f"{tick}[ {rank} {suit} ]{tick}"
-                )
-
-        return "　".join(displayed)
-
-    def display(self, reveal=False, result=""):
-        player_total = self.total(self.player)
-
-        dealer_total = (
-            self.total(self.dealer)
-            if reveal
-            else None
-        )
-
-        embed = make_embed(
-            "🃏 ONYX BLACKJACK",
-            (
-                f"**Wager:** {money(self.bet)}\n"
-                "━━━━━━━━━━━━━━━━━━━━"
-            ),
-        )
-
-        embed.add_field(
-            name=f"YOUR HAND — {player_total}",
-            value=self.format_hand(self.player),
-            inline=False,
-        )
-
-        embed.add_field(
-            name=(
-                f"DEALER'S HAND — {dealer_total}"
-                if reveal
-                else "DEALER'S HAND — Hidden"
-            ),
-            value=self.format_hand(
-                self.dealer,
-                hide_second=not reveal,
-            ),
-            inline=False,
-        )
-
-        if result:
-            embed.add_field(
-                name="ROUND RESULT",
-                value=result,
-                inline=False,
-            )
-
-        if not self.finished:
-            embed.set_footer(
-                text=(
-                    "Hit to draw • Stand to hold • "
-                    "Double Down to double your wager"
-                )
-            )
-        else:
-            embed.set_footer(
-                text="ONYX Arcade • Blackjack"
-            )
-
-        return embed
-
-    async def update_message(
-        self,
-        interaction,
-        reveal=False,
-        result="",
-    ):
-        await interaction.response.edit_message(
-            embed=self.display(
-                reveal=reveal,
-                result=result,
-            ),
-            view=self,
-            attachments=[],
-        )
-
-    async def finish(
-        self,
-        interaction,
-        dealer_plays=True,
-    ):
-        if dealer_plays:
-            while self.total(self.dealer) < 17:
-                self.dealer.append(self.draw())
-
-        player_total = self.total(self.player)
-        dealer_total = self.total(self.dealer)
-
-        self.finished = True
-
-        for child in self.children:
-            child.disabled = True
-
-        if player_total > 21:
-            result = (
-                f"💥 Bust! You lost {money(self.bet)}."
-            )
-
-        elif dealer_total > 21 or player_total > dealer_total:
-            returned = self.bet * 2
-
-            await pay_out(
-                self.bot,
-                self.user_id,
-                returned,
-                "blackjack_payout",
-                self.reference,
-            )
-
-            result = (
-                f"🎉 You won! **{money(returned)}** returned."
-            )
-
-        elif player_total == dealer_total:
-            await pay_out(
-                self.bot,
-                self.user_id,
-                self.bet,
-                "blackjack_push",
-                self.reference,
-            )
-
-            result = (
-                f"🤝 Push! Your **{money(self.bet)}** "
-                "wager was returned."
-            )
-
-        else:
-            result = (
-                f"Dealer wins. You lost {money(self.bet)}."
-            )
-
-        await self.update_message(
-            interaction,
-            reveal=True,
-            result=result,
-        )
-
-    @discord.ui.button(
-        label="Hit",
-        emoji="🃏",
-        style=discord.ButtonStyle.primary,
-    )
-    async def hit(self, interaction, button):
-        self.player.append(self.draw())
-
-        total = self.total(self.player)
-
-        if total >= 21:
-            await self.finish(
-                interaction,
-                dealer_plays=(total == 21),
-            )
-        else:
-            await self.update_message(interaction)
-
-    @discord.ui.button(
-        label="Stand",
-        emoji="✋",
-        style=discord.ButtonStyle.secondary,
-    )
-    async def stand(self, interaction, button):
-        await self.finish(interaction)
-
-    @discord.ui.button(
-        label="Double Down",
-        emoji="💰",
-        style=discord.ButtonStyle.success,
-    )
-    async def double_down(self, interaction, button):
-        if len(self.player) != 2:
-            return await interaction.response.send_message(
-                "Double Down is only available on your first turn.",
-                ephemeral=True,
-            )
-
-        result = await place_wager(
-            self.bot,
-            self.user_id,
-            self.bet,
-            "blackjack_double",
-        )
-
-        if not result.get("ok"):
-            return await interaction.response.send_message(
-                result.get(
-                    "error",
-                    "You cannot double down.",
-                ),
-                ephemeral=True,
-            )
-
-        self.bet *= 2
-        self.player.append(self.draw())
-
-        await self.finish(
-            interaction,
-            dealer_plays=(self.total(self.player) <= 21),
-        )
-
-
 class Economy(commands.Cog):
     """Global ONYX Credits, rewards, transfers, and arcade games."""
 
     def __init__(self, bot):
         self.bot = bot
+        self.arcade = ArcadeManager(bot)
 
     async def cog_load(self):
         if self.bot.db.backend != "postgres":
             return
 
-        await ensure_economy_tables(
-            self.bot.db.pool
-        )
+        await ensure_economy_tables(self.bot.db.pool)
+        await ensure_streak_tables(self.bot.db.pool)
 
     async def available(self, ctx):
         if self.bot.db.backend != "postgres":
@@ -822,26 +161,63 @@ class Economy(commands.Cog):
 
         return True
 
+    async def begin_game(self, ctx, amount, source):
+        if not await self.available(ctx):
+            return None
+
+        active = await get_streak(self.bot, ctx.author.id)
+
+        if active:
+            if active["status"] == "playing":
+                await ctx.send(
+                    "🔥 You already have a streak round in progress. "
+                    "Finish that game before starting another."
+                )
+            else:
+                await ctx.send(
+                    "🔥 You have an active arcade streak. "
+                    "Use `,streak` to cash out or continue it first."
+                )
+            return None
+
+        try:
+            amount = int(amount)
+        except (TypeError, ValueError):
+            await ctx.send("Enter a valid wager amount.")
+            return None
+
+        result = await place_wager(
+            self.bot,
+            ctx.author.id,
+            amount,
+            source,
+        )
+
+        if not result.get("ok"):
+            await ctx.send(
+                result.get("error", "Unable to place that wager.")
+            )
+            return None
+
+        return uuid.uuid4().hex
+
+    # ---------------------------------------------------------
+    # WALLET
+    # ---------------------------------------------------------
+
     @commands.command(
         name="balance",
         aliases=["bal", "credits"],
         help="View your global ONYX Credits balance.",
     )
-    async def balance(
-        self,
-        ctx,
-        member: discord.User = None,
-    ):
+    async def balance(self, ctx, member: discord.User = None):
         if not await self.available(ctx):
             return
 
         member = member or ctx.author
 
         async with self.bot.db.pool.acquire() as conn:
-            wallet = await get_credit_balance(
-                conn,
-                member.id,
-            )
+            wallet = await get_credit_balance(conn, member.id)
 
         em = make_embed(
             f"💳 {member.display_name}'s Wallet",
@@ -852,17 +228,75 @@ class Economy(commands.Cog):
             name="Lifetime earned",
             value=money(wallet["lifetime_earned"]),
         )
-
         em.add_field(
             name="Lifetime spent",
             value=money(wallet["lifetime_spent"]),
         )
-
         em.set_footer(
             text="One global wallet shared across every ONYX server"
         )
 
         await ctx.send(embed=em)
+
+    @commands.command(
+        name="pay",
+        help="Transfer Credits to another member.",
+    )
+    async def pay(self, ctx, member: discord.User, amount: int):
+        if not await self.available(ctx):
+            return
+
+        if member.bot or member.id == ctx.author.id:
+            return await ctx.send(
+                "You can only pay another human member."
+            )
+
+        if amount < 1 or amount > MAX_CREDITS:
+            return await ctx.send(
+                "Enter a valid positive Credit amount."
+            )
+
+        async with self.bot.db.pool.acquire() as conn:
+            async with conn.transaction():
+                sent = await spend_credits(
+                    conn,
+                    ctx.author.id,
+                    amount,
+                    "member_transfer",
+                    f"Transfer to {member.id}",
+                )
+
+                if not sent.get("ok"):
+                    return await ctx.send(
+                        "Not enough Credits. Your balance is "
+                        f"{money(sent.get('credits', 0))}."
+                    )
+
+                received = await grant_credits(
+                    conn,
+                    member.id,
+                    amount,
+                    "member_transfer",
+                    f"Transfer from {ctx.author.id}",
+                    reference_id=f"transfer:{uuid.uuid4().hex}",
+                )
+
+                if not received.get("ok"):
+                    raise RuntimeError(
+                        "Recipient wallet transfer failed."
+                    )
+
+        await ctx.send(
+            embed=make_embed(
+                "💸 Credits Transferred",
+                f"{ctx.author.mention} sent **{money(amount)}** "
+                f"to {member.mention}.",
+            )
+        )
+
+    # ---------------------------------------------------------
+    # REWARDS
+    # ---------------------------------------------------------
 
     async def run_reward(self, ctx, action):
         if not await self.available(ctx):
@@ -872,28 +306,22 @@ class Economy(commands.Cog):
 
         if action == "daily":
             amount = int(config["daily_reward"])
-
         elif action == "weekly":
             amount = int(config["weekly_reward"])
-
         elif action == "work":
             amount = random.randint(
                 int(config["work_min"]),
                 int(config["work_max"]),
             )
-
         else:
             amount = random.randint(
                 int(config["beg_min"]),
                 int(config["beg_max"]),
             )
-
             if random.random() < 0.35:
                 amount = 0
 
-        cooldown = int(
-            config[f"{action}_cooldown"]
-        )
+        cooldown = int(config[f"{action}_cooldown"])
 
         success, value = await claim_reward(
             self.bot,
@@ -922,113 +350,39 @@ class Economy(commands.Cog):
             )
 
         if amount:
+            title = f"💰 ONYX {action.title()}"
             message = (
                 f"{ctx.author.mention}, you received "
                 f"**{money(amount)}**!"
             )
-
-            title = f"💰 ONYX {action.title()}"
-
         else:
             title = "🪙 No luck this time"
-
             message = (
                 "Nobody had any spare Credits to give you. "
                 "Try again later."
             )
 
-        await ctx.send(
-            embed=make_embed(title, message)
-        )
+        await ctx.send(embed=make_embed(title, message))
 
-    @commands.command(
-        name="daily",
-        help="Claim your daily ONYX Credits.",
-    )
+    @commands.command(name="daily", help="Claim your daily ONYX Credits.")
     async def daily(self, ctx):
         await self.run_reward(ctx, "daily")
 
-    @commands.command(
-        name="weekly",
-        help="Claim your weekly ONYX Credits.",
-    )
+    @commands.command(name="weekly", help="Claim your weekly ONYX Credits.")
     async def weekly(self, ctx):
         await self.run_reward(ctx, "weekly")
 
-    @commands.command(
-        name="work",
-        help="Work to earn ONYX Credits.",
-    )
+    @commands.command(name="work", help="Work to earn ONYX Credits.")
     async def work(self, ctx):
         await self.run_reward(ctx, "work")
 
-    @commands.command(
-        name="beg",
-        help="Try your luck begging for Credits.",
-    )
+    @commands.command(name="beg", help="Try your luck begging for Credits.")
     async def beg(self, ctx):
         await self.run_reward(ctx, "beg")
 
-    @commands.command(
-        name="pay",
-        help="Transfer Credits to another member.",
-    )
-    async def pay(
-        self,
-        ctx,
-        member: discord.User,
-        amount: int,
-    ):
-        if not await self.available(ctx):
-            return
-
-        if member.bot or member.id == ctx.author.id:
-            return await ctx.send(
-                "You can only pay another human member."
-            )
-
-        if amount < 1 or amount > MAX_CREDITS:
-            return await ctx.send(
-                "Enter a valid positive Credit amount."
-            )
-
-        async with self.bot.db.pool.acquire() as conn:
-            async with conn.transaction():
-                sent = await spend_credits(
-                    conn,
-                    ctx.author.id,
-                    amount,
-                    "member_transfer",
-                    f"Transfer to {member.id}",
-                )
-
-                if not sent.get("ok"):
-                    return await ctx.send(
-                        f"Not enough Credits. Your balance is "
-                        f"{money(sent.get('credits', 0))}."
-                    )
-
-                received = await grant_credits(
-                    conn,
-                    member.id,
-                    amount,
-                    "member_transfer",
-                    f"Transfer from {ctx.author.id}",
-                    reference_id=f"transfer:{uuid.uuid4().hex}",
-                )
-
-                if not received.get("ok"):
-                    raise RuntimeError(
-                        "Recipient wallet transfer failed."
-                    )
-
-        await ctx.send(
-            embed=make_embed(
-                "💸 Credits Transferred",
-                f"{ctx.author.mention} sent **{money(amount)}** "
-                f"to {member.mention}.",
-            )
-        )
+    # ---------------------------------------------------------
+    # ECONOMY INFORMATION
+    # ---------------------------------------------------------
 
     @commands.group(
         name="economy",
@@ -1045,17 +399,14 @@ class Economy(commands.Cog):
             "💰 ONYX Global Economy",
             "Earn Credits, build your wallet, and play in the ONYX Arcade.",
         )
-
         em.add_field(
             name="Daily",
             value=money(config["daily_reward"]),
         )
-
         em.add_field(
             name="Weekly",
             value=money(config["weekly_reward"]),
         )
-
         em.add_field(
             name="Bet limits",
             value=(
@@ -1063,7 +414,6 @@ class Economy(commands.Cog):
                 f"{config['max_bet']:,}"
             ),
         )
-
         em.set_footer(
             text="Credits are global across every ONYX server."
         )
@@ -1095,9 +445,7 @@ class Economy(commands.Cog):
         lines = []
 
         for index, row in enumerate(rows, 1):
-            user = self.bot.get_user(
-                int(row["user_id"])
-            )
+            user = self.bot.get_user(int(row["user_id"]))
 
             name = (
                 discord.utils.escape_markdown(user.display_name)
@@ -1116,27 +464,48 @@ class Economy(commands.Cog):
             )
         )
 
-    async def begin_game(self, ctx, amount, source):
-        if not await self.available(ctx):
-            return None
+    # ---------------------------------------------------------
+    # ARCADE STREAK RECOVERY
+    # ---------------------------------------------------------
 
-        result = await place_wager(
-            self.bot,
-            ctx.author.id,
-            amount,
-            source,
+    @commands.command(
+        name="streak",
+        help="View, continue, or cash out your active arcade streak.",
+    )
+    async def streak(self, ctx):
+        if not await self.available(ctx):
+            return
+
+        current = await self.arcade.get_player_streak(ctx.author.id)
+
+        if not current:
+            return await ctx.send(
+                "You don't have an active ONYX arcade streak."
+            )
+
+        if current["status"] == "playing":
+            return await ctx.send(
+                "🔥 Your streak is currently marked as playing. "
+                "Finish that game first. If the game disappeared "
+                "after a bot restart, contact an ONYX administrator "
+                "before starting another round."
+            )
+
+        view = StreakDecisionView(
+            bot=self.bot,
+            user_id=ctx.author.id,
+            streak=current,
+            launch_game=self.arcade.launch_streak_game,
         )
 
-        if not result.get("ok"):
-            await ctx.send(
-                result.get(
-                    "error",
-                    "Unable to place that wager.",
-                )
-            )
-            return None
+        await ctx.send(
+            embed=view.decision_embed(),
+            view=view,
+        )
 
-        return uuid.uuid4().hex
+    # ---------------------------------------------------------
+    # ARCADE GAMES
+    # ---------------------------------------------------------
 
     @commands.command(
         name="betflip",
@@ -1148,22 +517,26 @@ class Economy(commands.Cog):
             amount,
             "betflip_wager",
         )
+        if not reference:
+            return
 
-        if reference:
-            await ctx.send(
-                embed=make_embed(
-                    "🪙 ONYX Betflip",
-                    f"Wager: **{money(amount)}**\n"
-                    "Choose heads or tails.",
-                ),
-                view=BetChoiceView(
-                    self.bot,
-                    ctx.author.id,
-                    amount,
-                    "betflip",
-                    reference,
-                ),
-            )
+        view = QuickGameView(
+            self.bot,
+            ctx.author.id,
+            amount,
+            "betflip",
+            reference,
+            result_handler=self.arcade.result_handler,
+        )
+
+        await ctx.send(
+            embed=make_embed(
+                "🪙 ONYX BETFLIP",
+                f"**Wager:** {money(amount)}\n\n"
+                "Choose Heads or Tails.",
+            ),
+            view=view,
+        )
 
     @commands.command(
         name="dice",
@@ -1175,22 +548,26 @@ class Economy(commands.Cog):
             amount,
             "dice_wager",
         )
+        if not reference:
+            return
 
-        if reference:
-            await ctx.send(
-                embed=make_embed(
-                    "🎲 ONYX Dice",
-                    f"Wager: **{money(amount)}**\n"
-                    "Choose Low (1–3) or High (4–6).",
-                ),
-                view=BetChoiceView(
-                    self.bot,
-                    ctx.author.id,
-                    amount,
-                    "dice",
-                    reference,
-                ),
-            )
+        view = QuickGameView(
+            self.bot,
+            ctx.author.id,
+            amount,
+            "dice",
+            reference,
+            result_handler=self.arcade.result_handler,
+        )
+
+        await ctx.send(
+            embed=make_embed(
+                "🎲 ONYX DICE",
+                f"**Wager:** {money(amount)}\n\n"
+                "Choose Low (1–3) or High (4–6).",
+            ),
+            view=view,
+        )
 
     @commands.command(
         name="slots",
@@ -1202,21 +579,24 @@ class Economy(commands.Cog):
             amount,
             "slots_wager",
         )
+        if not reference:
+            return
 
-        if reference:
-            await ctx.send(
-                embed=make_embed(
-                    "🎰 ONYX Slots",
-                    f"Wager: **{money(amount)}**\n"
-                    "Press Spin to play.",
-                ),
-                view=SlotsView(
-                    self.bot,
-                    ctx.author.id,
-                    amount,
-                    reference,
-                ),
-            )
+        view = SlotsView(
+            self.bot,
+            ctx.author.id,
+            amount,
+            reference,
+            result_handler=self.arcade.result_handler,
+        )
+
+        await ctx.send(
+            embed=view.slot_embed(
+                ["❔", "❔", "❔"],
+                f"**Wager:** {money(amount)}\nPress Spin to play.",
+            ),
+            view=view,
+        )
 
     @commands.command(
         name="blackjack",
@@ -1229,12 +609,10 @@ class Economy(commands.Cog):
             amount,
             "blackjack_wager",
         )
-
         if not reference:
             return
 
         draw = BlackjackView.draw
-
         player = [draw(), draw()]
         dealer = [draw(), draw()]
 
@@ -1245,16 +623,16 @@ class Economy(commands.Cog):
             reference,
             player,
             dealer,
+            result_handler=self.arcade.result_handler,
         )
 
         player_total = view.total(player)
         dealer_total = view.total(dealer)
 
+        # Natural blackjack is settled immediately.
         if player_total == 21:
             view.finished = True
-
-            for child in view.children:
-                child.disabled = True
+            view.disable_controls()
 
             if dealer_total == 21:
                 await pay_out(
@@ -1265,40 +643,75 @@ class Economy(commands.Cog):
                     reference,
                 )
 
-                result = (
-                    "🤝 Both you and the dealer have blackjack. "
-                    "Your wager was returned."
+                return await ctx.send(
+                    embed=view.display(
+                        reveal=True,
+                        result=(
+                            "🤝 Both you and the dealer have blackjack. "
+                            "Your wager was returned."
+                        ),
+                    ),
+                    view=view,
                 )
 
-            else:
-                winnings = int(amount * 2.5)
+            natural_payout = int(amount * 2.5)
 
-                await pay_out(
-                    self.bot,
-                    ctx.author.id,
-                    winnings,
-                    "blackjack_natural",
-                    reference,
+            created = await create_streak(
+                self.bot,
+                ctx.author.id,
+                natural_payout,
+                "blackjack",
+                reference=reference,
+            )
+
+            if created.get("ok"):
+                streak_view = StreakDecisionView(
+                    bot=self.bot,
+                    user_id=ctx.author.id,
+                    streak=created["streak"],
+                    launch_game=self.arcade.launch_streak_game,
                 )
 
-                result = (
-                    f"🌟 Natural Blackjack! "
-                    f"You received {money(winnings)}."
+                embed = view.display(
+                    reveal=True,
+                    result=(
+                        f"🌟 **Natural Blackjack!** "
+                        f"You won **{money(natural_payout)}**."
+                    ),
                 )
+                embed.description += (
+                    "\n\n━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"{streak_view.decision_embed().description}"
+                )
+
+                return await ctx.send(
+                    embed=embed,
+                    view=streak_view,
+                )
+
+            paid = await pay_out(
+                self.bot,
+                ctx.author.id,
+                natural_payout,
+                "blackjack_natural",
+                reference,
+            )
+
+            result = (
+                f"🌟 Natural Blackjack! "
+                f"You received {money(natural_payout)}."
+                if paid.get("ok")
+                else "⚠️ Your natural blackjack payout needs administrator review."
+            )
 
             return await ctx.send(
-                embed=view.display(
-                    reveal=True,
-                    result=result,
-                ),
+                embed=view.display(reveal=True, result=result),
                 view=view,
             )
 
         if dealer_total == 21:
             view.finished = True
-
-            for child in view.children:
-                child.disabled = True
+            view.disable_controls()
 
             return await ctx.send(
                 embed=view.display(
@@ -1315,6 +728,10 @@ class Economy(commands.Cog):
             embed=view.display(),
             view=view,
         )
+
+    # ---------------------------------------------------------
+    # OWNER ECONOMY CONFIGURATION
+    # ---------------------------------------------------------
 
     @commands.group(
         name="econconfig",
@@ -1334,10 +751,7 @@ class Economy(commands.Cog):
             "`,econconfig enabled <true|false>`"
         )
 
-    @econconfig.command(
-        name="rewards",
-        hidden=True,
-    )
+    @econconfig.command(name="rewards", hidden=True)
     @commands.is_owner()
     async def config_rewards(
         self,
@@ -1355,9 +769,7 @@ class Economy(commands.Cog):
             or maximum < minimum
             or maximum > MAX_CREDITS
         ):
-            return await ctx.send(
-                "Invalid reward settings."
-            )
+            return await ctx.send("Invalid reward settings.")
 
         async with self.bot.db.pool.acquire() as conn:
             if reward in {"daily", "weekly"}:
@@ -1373,7 +785,6 @@ class Economy(commands.Cog):
                     minimum,
                     ctx.author.id,
                 )
-
             else:
                 await conn.execute(
                     f"""UPDATE onyx_economy_settings
@@ -1384,21 +795,11 @@ class Economy(commands.Cog):
                     ctx.author.id,
                 )
 
-        await ctx.send(
-            f"✅ {reward.title()} reward updated."
-        )
+        await ctx.send(f"✅ {reward.title()} reward updated.")
 
-    @econconfig.command(
-        name="cooldown",
-        hidden=True,
-    )
+    @econconfig.command(name="cooldown", hidden=True)
     @commands.is_owner()
-    async def config_cooldown(
-        self,
-        ctx,
-        action: str,
-        seconds: int,
-    ):
+    async def config_cooldown(self, ctx, action: str, seconds: int):
         columns = {
             "daily": "daily_cooldown",
             "weekly": "weekly_cooldown",
@@ -1408,10 +809,7 @@ class Economy(commands.Cog):
 
         action = action.casefold()
 
-        if (
-            action not in columns
-            or not 60 <= seconds <= 31_536_000
-        ):
+        if action not in columns or not 60 <= seconds <= 31_536_000:
             return await ctx.send(
                 "Choose daily, weekly, work, or beg and a cooldown "
                 "between 60 and 31,536,000 seconds."
@@ -1420,37 +818,23 @@ class Economy(commands.Cog):
         async with self.bot.db.pool.acquire() as conn:
             await conn.execute(
                 f"""UPDATE onyx_economy_settings
-                SET {columns[action]}=$1,
-                updated_by=$2,
-                updated_at=CURRENT_TIMESTAMP
-                WHERE id=1""",
+                SET {columns[action]}=$1, updated_by=$2,
+                updated_at=CURRENT_TIMESTAMP WHERE id=1""",
                 seconds,
                 ctx.author.id,
             )
 
-        await ctx.send(
-            f"✅ {action.title()} cooldown updated."
-        )
+        await ctx.send(f"✅ {action.title()} cooldown updated.")
 
-    @econconfig.command(
-        name="bets",
-        hidden=True,
-    )
+    @econconfig.command(name="bets", hidden=True)
     @commands.is_owner()
-    async def config_bets(
-        self,
-        ctx,
-        minimum: int,
-        maximum: int,
-    ):
+    async def config_bets(self, ctx, minimum: int, maximum: int):
         if (
             minimum < 1
             or maximum < minimum
             or maximum > MAX_CREDITS
         ):
-            return await ctx.send(
-                "Invalid betting limits."
-            )
+            return await ctx.send("Invalid betting limits.")
 
         async with self.bot.db.pool.acquire() as conn:
             await conn.execute("""
@@ -1465,22 +849,13 @@ class Economy(commands.Cog):
             f"{minimum:,}–{maximum:,} Credits."
         )
 
-    @econconfig.command(
-        name="enabled",
-        hidden=True,
-    )
+    @econconfig.command(name="enabled", hidden=True)
     @commands.is_owner()
-    async def config_enabled(
-        self,
-        ctx,
-        value: str,
-    ):
+    async def config_enabled(self, ctx, value: str):
         value = value.casefold()
 
         if value not in {"true", "false", "on", "off"}:
-            return await ctx.send(
-                "Use true or false."
-            )
+            return await ctx.send("Use true or false.")
 
         enabled = value in {"true", "on"}
 
