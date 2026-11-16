@@ -38,6 +38,27 @@ async def ensure_streak_tables(pool):
         """)
 
 
+async def recover_interrupted_streaks(bot):
+    """Restore unfinished streak rounds after a bot restart.
+
+    A completed round changes its status transactionally to active or lost.
+    Therefore, a streak still marked playing at startup has no committed
+    result and can safely return to active without changing its pot.
+    """
+
+    async with bot.db.pool.acquire() as conn:
+        rows = await conn.fetch("""
+            UPDATE onyx_arcade_streaks
+            SET status='active',
+                current_game=NULL,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE status='playing'
+            RETURNING user_id
+        """)
+
+    return [int(row["user_id"]) for row in rows]
+
+
 async def get_streak(bot, user_id):
     """Return a player's active streak, if one exists."""
 
