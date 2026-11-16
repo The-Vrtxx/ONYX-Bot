@@ -12,6 +12,7 @@ from cogs.economy._common import (
     money,
     pay_out,
 )
+from cogs.economy.games._streaks import cancel_streak_round
 
 
 SLOT_SYMBOLS = ("🍒", "🍋", "🍇", "🔔", "💎", "7️⃣")
@@ -40,11 +41,11 @@ class SlotsView(PlayerView):
             "slots",
             reference,
             timeout=90,
+            streak_id=streak_id,
         )
 
         self.spinning = False
         self.result_handler = result_handler
-        self.streak_id = streak_id
 
     def slot_embed(self, reels, status=""):
         display = "　|　".join(
@@ -100,8 +101,6 @@ class SlotsView(PlayerView):
                 f"Payout: **{money(winnings)}**"
             )
 
-            color = discord.Color.gold()
-
             if self.result_handler:
                 await self.result_handler(
                     interaction,
@@ -112,7 +111,7 @@ class SlotsView(PlayerView):
                 )
                 return
 
-            await pay_out(
+            paid = await pay_out(
                 self.bot,
                 self.user_id,
                 winnings,
@@ -120,15 +119,16 @@ class SlotsView(PlayerView):
                 self.reference,
             )
 
-        else:
-            winnings = 0
+            if not paid or not paid.get("ok"):
+                result += "\n\n⚠️ Your payout needs administrator review."
 
+            color = discord.Color.gold()
+
+        else:
             result = (
                 f"❌ **No win this time.**\n\n"
                 f"You lost **{money(self.bet)}**."
             )
-
-            color = discord.Color.red()
 
             if self.result_handler:
                 await self.result_handler(
@@ -139,6 +139,8 @@ class SlotsView(PlayerView):
                     result,
                 )
                 return
+
+            color = discord.Color.red()
 
         final_embed = self.slot_embed(
             reels,
@@ -152,19 +154,40 @@ class SlotsView(PlayerView):
             view=self,
         )
 
+    async def recover_failed_spin(self):
+        """Release a streak round if the animation cannot finish."""
+
+        if self.streak_id:
+            await cancel_streak_round(
+                self.bot,
+                self.user_id,
+                self.streak_id,
+            )
+            return
+
+        # A normal wager is refunded if the spin cannot be completed.
+        await pay_out(
+            self.bot,
+            self.user_id,
+            self.bet,
+            "slots_refund",
+            f"{self.reference}:refund",
+        )
+
     @discord.ui.button(
         label="Spin",
         emoji="🎰",
         style=discord.ButtonStyle.success,
     )
     async def spin(self, interaction, button):
-        if self.spinning or self.finished:
+        if self.spinning or self.finished or self.settling:
             return await interaction.response.send_message(
                 "This slot machine is already spinning or finished.",
                 ephemeral=True,
             )
 
         self.spinning = True
+        self.settling = True
         self.finished = True
         button.disabled = True
 
@@ -176,15 +199,15 @@ class SlotsView(PlayerView):
 
         multiplier = self.calculate_multiplier(final_reels)
 
-        await interaction.response.edit_message(
-            embed=self.slot_embed(
-                ["❔", "❔", "❔"],
-                "🎰 **Spinning...**",
-            ),
-            view=self,
-        )
-
         try:
+            await interaction.response.edit_message(
+                embed=self.slot_embed(
+                    ["❔", "❔", "❔"],
+                    "🎰 **Spinning...**",
+                ),
+                view=self,
+            )
+
             # Animate the reels.
             for _ in range(self.SPIN_FRAMES):
                 animated_reels = [
@@ -227,6 +250,7 @@ class SlotsView(PlayerView):
 
                 await asyncio.sleep(self.STOP_DELAY)
 
+            # The result handler now owns settlement.
             await self.finish_result(
                 interaction,
                 final_reels,
@@ -234,6 +258,13 @@ class SlotsView(PlayerView):
             )
 
         except Exception:
-            # The spin result is predetermined. Do not reopen the
-            # button or permit another spin after an animation error.
+            # Do not silently strand a streak pot or normal wager.
+            try:
+                await self.recover_failed_spin()
+            except Exception:
+                pass
+
             raise
+
+        finally:
+            self.settling = False
