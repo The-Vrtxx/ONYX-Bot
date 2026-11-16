@@ -29,9 +29,16 @@ GAME_NAMES = {
 }
 
 
-class ArcadeManager:
-    """Owns the shared settlement and streak flow."""
+async def edit_game_message(interaction, **kwargs):
+    """Edit the original game message, even after an interaction was used."""
 
+    if interaction.response.is_done():
+        return await interaction.edit_original_response(**kwargs)
+
+    return await interaction.response.edit_message(**kwargs)
+
+
+class ArcadeManager:
     def __init__(self, bot):
         self.bot = bot
 
@@ -43,12 +50,11 @@ class ArcadeManager:
         payout,
         result_text,
     ):
-        """Settle a game result and show the correct next screen."""
-
         user_id = int(game_view.user_id)
+        game = str(game_view.game)
         streak_id = getattr(game_view, "streak_id", None)
 
-        # A push does not advance or destroy an existing streak.
+        # A push returns the wager and leaves a continued streak unchanged.
         if outcome == "push":
             if streak_id:
                 await cancel_streak_round(
@@ -57,27 +63,27 @@ class ArcadeManager:
                     streak_id,
                 )
 
-                streak = await get_streak(
-                    self.bot,
-                    user_id,
-                )
+                streak = await get_streak(self.bot, user_id)
 
                 if streak:
                     return await self.show_decision(
                         interaction,
                         streak,
-                        game_view.game,
+                        game,
                         prefix=(
                             f"{result_text}\n\n"
                             "Your streak pot is unchanged."
                         ),
                     )
 
-                return await interaction.response.edit_message(
-                    embed=make_embed(
-                        "ONYX ARCADE",
-                        result_text,
-                    ),
+                result_text += (
+                    "\n\n⚠️ Your streak could not be recovered. "
+                    "Please contact an ONYX administrator."
+                )
+
+                return await edit_game_message(
+                    interaction,
+                    embed=make_embed("ONYX STREAK REVIEW", result_text),
                     view=None,
                 )
 
@@ -85,7 +91,7 @@ class ArcadeManager:
                 self.bot,
                 user_id,
                 int(payout),
-                f"{game_view.game}_push",
+                f"{game}_push",
                 game_view.reference,
             )
 
@@ -95,15 +101,16 @@ class ArcadeManager:
                     "Please contact an ONYX administrator."
                 )
 
-            return await interaction.response.edit_message(
+            return await edit_game_message(
+                interaction,
                 embed=make_embed(
-                    GAME_NAMES.get(game_view.game, "ONYX ARCADE"),
+                    GAME_NAMES.get(game, "ONYX ARCADE"),
                     result_text,
                 ),
                 view=None,
             )
 
-        # A loss ends a continued streak, but does not create a payout.
+        # A loss ends a continued streak.
         if outcome == "loss":
             if streak_id:
                 lost = await lose_streak(
@@ -112,25 +119,28 @@ class ArcadeManager:
                     streak_id,
                 )
 
-                if not lost.get("ok"):
+                if lost.get("ok"):
                     result_text += (
-                        "\n\n⚠️ Streak settlement needs administrator review."
+                        "\n\n🔥 **Your streak has ended.**\n"
+                        f"You lost the entire "
+                        f"**{money(lost['lost_amount'])}** streak pot."
                     )
                 else:
                     result_text += (
-                        "\n\n🔥 **Your streak has ended.** "
-                        f"You lost the {money(lost['lost_amount'])} streak pot."
+                        "\n\n⚠️ Streak settlement needs "
+                        "administrator review."
                     )
 
-            return await interaction.response.edit_message(
+            return await edit_game_message(
+                interaction,
                 embed=make_embed(
-                    GAME_NAMES.get(game_view.game, "ONYX ARCADE"),
+                    GAME_NAMES.get(game, "ONYX ARCADE"),
                     result_text,
                 ),
                 view=None,
             )
 
-        # A win during a continued streak multiplies the existing pot.
+        # A continued streak win multiplies the entire current pot.
         if streak_id:
             updated = await record_streak_win(
                 self.bot,
@@ -139,17 +149,38 @@ class ArcadeManager:
             )
 
             if not updated.get("ok"):
-                result_text += (
-                    "\n\n⚠️ The streak could not be advanced. "
-                    "Your current pot has not been paid out. "
-                    "Please use `,streak` or contact an ONYX administrator."
+                # If the next payout would exceed the Credits cap,
+                # return the streak to its active state so it can be
+                # cashed out safely.
+                await cancel_streak_round(
+                    self.bot,
+                    user_id,
+                    streak_id,
                 )
 
-                return await interaction.response.edit_message(
-                    embed=make_embed(
-                        "ONYX STREAK REVIEW",
-                        result_text,
-                    ),
+                streak = await get_streak(self.bot, user_id)
+
+                if streak:
+                    return await self.show_decision(
+                        interaction,
+                        streak,
+                        game,
+                        prefix=(
+                            f"{result_text}\n\n"
+                            "⚠️ Your current streak pot has been preserved. "
+                            "The next payout cannot exceed the Credits limit, "
+                            "so you must cash out."
+                        ),
+                    )
+
+                result_text += (
+                    "\n\n⚠️ The streak could not be advanced. "
+                    "Please contact an ONYX administrator."
+                )
+
+                return await edit_game_message(
+                    interaction,
+                    embed=make_embed("ONYX STREAK REVIEW", result_text),
                     view=None,
                 )
 
@@ -158,7 +189,7 @@ class ArcadeManager:
             return await self.show_decision(
                 interaction,
                 streak,
-                game_view.game,
+                game,
                 prefix=(
                     f"{result_text}\n\n"
                     f"🔥 Streak multiplier: "
@@ -167,22 +198,21 @@ class ArcadeManager:
                 ),
             )
 
-        # First win: place the full game payout into streak escrow.
+        # First win: hold the winnings in a new optional streak.
         created = await create_streak(
             self.bot,
             user_id,
             int(payout),
-            game_view.game,
+            game,
             reference=game_view.reference,
         )
 
         if not created.get("ok"):
-            # Do not leave a normal win unpaid if a streak cannot be opened.
             paid = await pay_out(
                 self.bot,
                 user_id,
                 int(payout),
-                f"{game_view.game}_payout",
+                f"{game}_payout",
                 game_view.reference,
             )
 
@@ -196,9 +226,10 @@ class ArcadeManager:
                     "\n\n⚠️ Your winnings need administrator review."
                 )
 
-            return await interaction.response.edit_message(
+            return await edit_game_message(
+                interaction,
                 embed=make_embed(
-                    GAME_NAMES.get(game_view.game, "ONYX ARCADE"),
+                    GAME_NAMES.get(game, "ONYX ARCADE"),
                     result_text,
                 ),
                 view=None,
@@ -207,7 +238,7 @@ class ArcadeManager:
         return await self.show_decision(
             interaction,
             created["streak"],
-            game_view.game,
+            game,
             prefix=result_text,
         )
 
@@ -215,13 +246,9 @@ class ArcadeManager:
         self,
         interaction,
         streak,
-        previous_game,
+        previous_game=None,
         prefix="",
     ):
-        """Show cash-out and continue options."""
-
-        from cogs.economy.games._streak_views import StreakDecisionView
-
         view = StreakDecisionView(
             bot=self.bot,
             user_id=interaction.user.id,
@@ -238,14 +265,13 @@ class ArcadeManager:
                 f"{embed.description}"
             )
 
-        await interaction.response.edit_message(
+        return await edit_game_message(
+            interaction,
             embed=embed,
             view=view,
         )
 
     async def launch_streak_game(self, interaction, game):
-        """Start the selected game using the existing streak pot."""
-
         game = str(game).casefold()
 
         if game not in GAME_NAMES:
@@ -270,91 +296,94 @@ class ArcadeManager:
         streak_id = started["streak_id"]
         reference = f"{streak_id}:{uuid.uuid4().hex}"
 
-        result_handler = self.result_handler
+        try:
+            if game == "blackjack":
+                player = [
+                    BlackjackView.draw(),
+                    BlackjackView.draw(),
+                ]
+                dealer = [
+                    BlackjackView.draw(),
+                    BlackjackView.draw(),
+                ]
 
-        if game == "blackjack":
-            player = [
-                BlackjackView.draw(),
-                BlackjackView.draw(),
-            ]
+                view = BlackjackView(
+                    self.bot,
+                    interaction.user.id,
+                    wager,
+                    reference,
+                    player,
+                    dealer,
+                    result_handler=self.result_handler,
+                    streak_id=streak_id,
+                )
 
-            dealer = [
-                BlackjackView.draw(),
-                BlackjackView.draw(),
-            ]
+                # BlackjackView automatically disables Double Down
+                # during streak rounds.
+                return await edit_game_message(
+                    interaction,
+                    embed=view.display(),
+                    view=view,
+                )
 
-            view = BlackjackView(
+            if game == "slots":
+                view = SlotsView(
+                    self.bot,
+                    interaction.user.id,
+                    wager,
+                    reference,
+                    result_handler=self.result_handler,
+                    streak_id=streak_id,
+                )
+
+                return await edit_game_message(
+                    interaction,
+                    embed=view.slot_embed(
+                        ["❔", "❔", "❔"],
+                        "Press Spin to risk your streak pot.",
+                    ),
+                    view=view,
+                )
+
+            view = QuickGameView(
                 self.bot,
                 interaction.user.id,
                 wager,
+                game,
                 reference,
-                player,
-                dealer,
-                result_handler=result_handler,
+                result_handler=self.result_handler,
                 streak_id=streak_id,
             )
 
-            view.disable_double_down()
+            if game == "dice":
+                description = (
+                    f"**Streak Pot at Risk:** {money(wager)}\n\n"
+                    "Choose Low (1–3) or High (4–6)."
+                )
+            else:
+                description = (
+                    f"**Streak Pot at Risk:** {money(wager)}\n\n"
+                    "Choose Heads or Tails."
+                )
 
-            await interaction.response.edit_message(
-                embed=view.display(),
-                view=view,
-            )
-
-            return
-
-        if game == "slots":
-            view = SlotsView(
-                self.bot,
-                interaction.user.id,
-                wager,
-                reference,
-                result_handler=result_handler,
-                streak_id=streak_id,
-            )
-
-            await interaction.response.edit_message(
-                embed=view.slot_embed(
-                    ["❔", "❔", "❔"],
-                    "Press Spin to risk your streak pot.",
+            return await edit_game_message(
+                interaction,
+                embed=make_embed(
+                    GAME_NAMES[game],
+                    description,
                 ),
                 view=view,
             )
 
-            return
-
-        view = QuickGameView(
-            self.bot,
-            interaction.user.id,
-            wager,
-            game,
-            reference,
-            result_handler=result_handler,
-            streak_id=streak_id,
-        )
-
-        if game == "dice":
-            description = (
-                f"**Streak Pot at Risk:** {money(wager)}\n\n"
-                "Choose Low (1–3) or High (4–6)."
+        except Exception:
+            # If the game could not be displayed, restore the streak
+            # to its active state instead of leaving it locked.
+            await cancel_streak_round(
+                self.bot,
+                interaction.user.id,
+                streak_id,
             )
-        else:
-            description = (
-                f"**Streak Pot at Risk:** {money(wager)}\n\n"
-                "Choose Heads or Tails."
-            )
-
-        await interaction.response.edit_message(
-            embed=make_embed(
-                GAME_NAMES[game],
-                description,
-            ),
-            view=view,
-        )
+            raise
 
     async def get_player_streak(self, user_id):
-        """Return the player's current streak."""
-        return await get_streak(
-            self.bot,
-            user_id,
-        )
+        return await get_streak(self.bot, user_id)
