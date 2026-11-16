@@ -20,6 +20,7 @@ import asyncpg
 
 from website_commands import register_routes as register_command_routes
 from owner_portal_api import register_owner_routes
+from owner_arcade_api import register_arcade_routes
 from server_owner_api import register_server_owner_routes, ensure_server_owner_tables
 from server_management_api import register_management_routes, ensure_management_tables
 from profile_card_api import register_profile_card_route
@@ -1248,6 +1249,13 @@ def create_app():
     app.router.add_get("/api/developer/access", developer_access)
 
     register_owner_routes(
+        app,
+        require_user,
+        BOT_OWNER_ID
+    )
+
+    # OWNER-ONLY ARCADE CONTROL CENTER
+    register_arcade_routes(
         app,
         require_user,
         BOT_OWNER_ID
