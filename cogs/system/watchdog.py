@@ -1,5 +1,5 @@
 
-"""ONYX Watchdog — bot activity instrumentation."""
+"""ONYX Watchdog — global bot activity instrumentation."""
 
 import logging
 
@@ -19,7 +19,6 @@ class WatchdogCog(commands.Cog):
         self.watchdog = None
 
     async def cog_load(self):
-        """Initialize the logger after the bot database is ready."""
         self.watchdog = WatchdogLogger(self.bot.db)
         await self.watchdog.initialize()
 
@@ -37,7 +36,6 @@ class WatchdogCog(commands.Cog):
         log.info("ONYX Watchdog monitoring is active.")
 
     async def record(self, **kwargs):
-        """Safely record an event without interrupting bot operations."""
         if not self.watchdog:
             return
 
@@ -46,24 +44,81 @@ class WatchdogCog(commands.Cog):
         except Exception:
             log.exception("Watchdog event listener failed.")
 
+    @staticmethod
+    def get_command_category(ctx):
+        """Identify the command's owning feature."""
+        command = ctx.command
+
+        if command is None:
+            return "command"
+
+        module = ""
+
+        if command.cog:
+            module = command.cog.__class__.__module__.casefold()
+
+        qualified_name = command.qualified_name.casefold()
+
+        if "moderation" in module:
+            return "moderation"
+
+        if any(
+            word in module
+            for word in ("security", "protection", "antinuke", "antiraid")
+        ):
+            return "security"
+
+        if "economy" in module or any(
+            word in qualified_name
+            for word in ("blackjack", "slots", "dice", "betflip", "pay")
+        ):
+            return "economy"
+
+        if "level" in module or "prestige" in qualified_name:
+            return "leveling"
+
+        return "command"
+
+    @staticmethod
+    def get_target_id(ctx):
+        """Find a target Discord user without recording command arguments."""
+        candidates = list(ctx.args or []) + list(
+            (ctx.kwargs or {}).values()
+        )
+
+        for value in candidates:
+            if isinstance(value, (discord.Member, discord.User)):
+                if value.id != ctx.author.id:
+                    return value.id
+
+        return None
+
     @commands.Cog.listener()
     async def on_command_completion(self, ctx):
-        """Record successfully completed prefix commands."""
+        category = self.get_command_category(ctx)
+
+        details = {
+            "channel_id": ctx.channel.id,
+            "command_type": "prefix",
+        }
+
+        if category == "moderation":
+            target_id = self.get_target_id(ctx)
+
+            if target_id:
+                details["target_id"] = target_id
+
         await self.record(
-            category="command",
+            category=category,
             action=ctx.command.qualified_name,
             outcome="success",
             user_id=ctx.author.id,
             guild_id=ctx.guild.id if ctx.guild else None,
-            details={
-                "channel_id": ctx.channel.id,
-                "command_type": "prefix",
-            }
+            details=details,
         )
 
     @commands.Cog.listener()
     async def on_command_error(self, ctx, error):
-        """Record command failures without storing arguments or error text."""
         if isinstance(
             error,
             (
@@ -78,7 +133,7 @@ class WatchdogCog(commands.Cog):
             outcome = "error"
 
         await self.record(
-            category="command",
+            category=self.get_command_category(ctx),
             action=(
                 ctx.command.qualified_name
                 if ctx.command
@@ -92,12 +147,11 @@ class WatchdogCog(commands.Cog):
                 "error_type": type(
                     getattr(error, "original", error)
                 ).__name__,
-            }
+            },
         )
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild):
-        """Record when ONYX joins a server."""
         await self.record(
             category="server",
             action="guild_joined",
@@ -106,12 +160,11 @@ class WatchdogCog(commands.Cog):
             details={
                 "member_count": guild.member_count,
                 "owner_id": guild.owner_id,
-            }
+            },
         )
 
     @commands.Cog.listener()
     async def on_guild_remove(self, guild):
-        """Record when ONYX leaves or is removed from a server."""
         await self.record(
             category="server",
             action="guild_removed",
@@ -119,12 +172,11 @@ class WatchdogCog(commands.Cog):
             guild_id=guild.id,
             details={
                 "server_name": guild.name,
-            }
+            },
         )
 
     @commands.Cog.listener()
     async def on_member_ban(self, guild, user):
-        """Record server ban events."""
         await self.record(
             category="moderation",
             action="member_banned",
@@ -133,12 +185,11 @@ class WatchdogCog(commands.Cog):
             guild_id=guild.id,
             details={
                 "username": str(user)[:100],
-            }
+            },
         )
 
     @commands.Cog.listener()
     async def on_member_unban(self, guild, user):
-        """Record server unban events."""
         await self.record(
             category="moderation",
             action="member_unbanned",
@@ -147,12 +198,11 @@ class WatchdogCog(commands.Cog):
             guild_id=guild.id,
             details={
                 "username": str(user)[:100],
-            }
+            },
         )
 
     @commands.Cog.listener()
     async def on_disconnect(self):
-        """Record a Discord gateway disconnect."""
         await self.record(
             category="system",
             action="gateway_disconnected",
@@ -161,7 +211,6 @@ class WatchdogCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_resumed(self):
-        """Record a successful Discord gateway resume."""
         await self.record(
             category="system",
             action="gateway_resumed",
