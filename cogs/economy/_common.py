@@ -13,6 +13,8 @@ from currency_system import (
     spend_credits,
 )
 
+from cogs.economy.games._streaks import cancel_streak_round
+
 
 COLOR = discord.Color.from_rgb(25, 190, 190)
 
@@ -49,7 +51,7 @@ async def balance_line(bot, user_id):
 
 
 async def place_wager(bot, user_id, amount, source):
-    """Validate and deduct a game wager."""
+    """Validate and deduct a normal game wager."""
     amount = int(amount)
 
     if amount <= 0 or amount > MAX_CREDITS:
@@ -73,15 +75,15 @@ async def place_wager(bot, user_id, amount, source):
                 }
 
             if (
-                amount < settings["min_bet"]
-                or amount > settings["max_bet"]
+                amount < int(settings["min_bet"])
+                or amount > int(settings["max_bet"])
             ):
                 return {
                     "ok": False,
                     "error": (
                         f"Bets must be between "
-                        f"{settings['min_bet']:,} and "
-                        f"{settings['max_bet']:,} Credits."
+                        f"{int(settings['min_bet']):,} and "
+                        f"{int(settings['max_bet']):,} Credits."
                     ),
                 }
 
@@ -120,14 +122,20 @@ async def pay_out(
 
     async with bot.db.pool.acquire() as conn:
         async with conn.transaction():
-            return await grant_credits(
-                conn,
-                user_id,
-                amount,
-                source=source,
-                description="ONYX Arcade payout",
-                reference_id=reference,
-            )
+            try:
+                return await grant_credits(
+                    conn,
+                    user_id,
+                    amount,
+                    source=source,
+                    description="ONYX Arcade payout",
+                    reference_id=reference,
+                )
+            except ValueError as error:
+                return {
+                    "ok": False,
+                    "error": str(error),
+                }
 
 
 class PlayerView(discord.ui.View):
@@ -141,6 +149,7 @@ class PlayerView(discord.ui.View):
         game,
         reference,
         timeout=90,
+        streak_id=None,
     ):
         super().__init__(timeout=timeout)
 
@@ -149,6 +158,12 @@ class PlayerView(discord.ui.View):
         self.bet = int(bet)
         self.game = str(game)
         self.reference = str(reference)
+        self.streak_id = (
+            str(streak_id)
+            if streak_id is not None
+            else None
+        )
+
         self.finished = False
         self.settling = False
 
@@ -182,13 +197,27 @@ class PlayerView(discord.ui.View):
             child.disabled = True
 
     async def refund(self):
-        """Return the original wager if a game expires unfinished."""
+        """Refund a normal wager or release an unfinished streak round."""
+
         if self.finished or self.settling:
             return
 
         self.settling = True
 
         try:
+            if self.streak_id:
+                # The streak pot was never deducted from the wallet.
+                # Return the round to active status without paying Credits.
+                await cancel_streak_round(
+                    self.bot,
+                    self.user_id,
+                    self.streak_id,
+                )
+
+                self.finished = True
+                self.disable_controls()
+                return
+
             result = await pay_out(
                 self.bot,
                 self.user_id,
@@ -205,7 +234,7 @@ class PlayerView(discord.ui.View):
             self.settling = False
 
     async def on_timeout(self):
-        """Refund an unfinished game when its controls expire."""
+        """Refund or release an unfinished game when its controls expire."""
         try:
             await self.refund()
         except Exception:
