@@ -501,7 +501,7 @@ class Economy(commands.Cog):
         )
 
         await ctx.send(
-            embed=view.decision_embed(),
+            embed=await view.decision_embed(),
             view=view,
         )
 
@@ -674,6 +674,8 @@ class Economy(commands.Cog):
                     launch_game=self.arcade.launch_streak_game,
                 )
 
+                decision_embed = await streak_view.decision_embed()
+
                 embed = view.display(
                     reveal=True,
                     result=(
@@ -683,7 +685,7 @@ class Economy(commands.Cog):
                 )
                 embed.description += (
                     "\n\n━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{streak_view.decision_embed().description}"
+                    f"{decision_embed.description}"
                 )
 
                 return await ctx.send(
