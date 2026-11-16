@@ -8,7 +8,6 @@ Prestige Tokens remain separate and are never modified here.
 import random
 import uuid
 from datetime import datetime, timezone
-from io import BytesIO
 
 import discord
 from discord.ext import commands
@@ -406,7 +405,7 @@ class SlotsView(PlayerView):
 
 
 class BlackjackView(PlayerView):
-    """Visual blackjack game using the ONYX card artwork renderer."""
+    """Native Discord embed blackjack game."""
 
     SUITS = ("♠", "♥", "♦", "♣")
 
@@ -451,7 +450,6 @@ class BlackjackView(PlayerView):
     def draw(cls):
         rank, value = random.choice(cls.RANKS)
         suit = random.choice(cls.SUITS)
-
         return (rank, value, suit)
 
     @staticmethod
@@ -468,47 +466,61 @@ class BlackjackView(PlayerView):
 
         return total
 
-    def render(self, reveal=False, result=""):
-        from cogs.economy.card_art import render_blackjack_png
+    @staticmethod
+    def format_hand(hand, hide_second=False):
+        """Display cards as text directly inside the embed."""
 
+        displayed = []
+
+        for index, card in enumerate(hand):
+            if hide_second and index == 1:
+                displayed.append("`[ ?? ]`")
+                continue
+
+            rank, value, suit = card
+            displayed.append(f"`[ {rank} {suit} ]`")
+
+        return "　".join(displayed)
+
+    def display(self, reveal=False, result=""):
         player_total = self.total(self.player)
 
         dealer_total = (
             self.total(self.dealer)
             if reveal
-            else 0
-        )
-
-        artwork = render_blackjack_png(
-            self.player,
-            self.dealer,
-            reveal,
-            player_total,
-            dealer_total,
-        )
-
-        file = discord.File(
-            BytesIO(artwork),
-            filename="onyx-blackjack.png",
+            else None
         )
 
         embed = make_embed(
-            "🃏 ONYX Blackjack",
+            "🃏 ONYX BLACKJACK",
             (
                 f"**Wager:** {money(self.bet)}\n"
-                f"**Your total:** {player_total}\n"
-                f"**Dealer:** "
-                f"{dealer_total if reveal else 'Hidden'}"
+                "━━━━━━━━━━━━━━━━━━━━"
             ),
         )
 
-        embed.set_image(
-            url="attachment://onyx-blackjack.png"
+        embed.add_field(
+            name=f"YOUR HAND — {player_total}",
+            value=self.format_hand(self.player),
+            inline=False,
+        )
+
+        embed.add_field(
+            name=(
+                f"DEALER'S HAND — {dealer_total}"
+                if reveal
+                else "DEALER'S HAND — Hidden"
+            ),
+            value=self.format_hand(
+                self.dealer,
+                hide_second=not reveal,
+            ),
+            inline=False,
         )
 
         if result:
             embed.add_field(
-                name="Round Result",
+                name="ROUND RESULT",
                 value=result,
                 inline=False,
             )
@@ -520,8 +532,12 @@ class BlackjackView(PlayerView):
                     "Double Down to double your wager"
                 )
             )
+        else:
+            embed.set_footer(
+                text="ONYX Arcade • Blackjack"
+            )
 
-        return embed, file
+        return embed
 
     async def update_message(
         self,
@@ -529,14 +545,11 @@ class BlackjackView(PlayerView):
         reveal=False,
         result="",
     ):
-        embed, file = self.render(
-            reveal=reveal,
-            result=result,
-        )
-
         await interaction.response.edit_message(
-            embed=embed,
-            attachments=[file],
+            embed=self.display(
+                reveal=reveal,
+                result=result,
+            ),
             view=self,
         )
 
@@ -588,7 +601,7 @@ class BlackjackView(PlayerView):
 
             result = (
                 f"🤝 Push! Your **{money(self.bet)}** "
-                f"wager was returned."
+                "wager was returned."
             )
 
         else:
@@ -1096,7 +1109,7 @@ class Economy(commands.Cog):
     @commands.command(
         name="blackjack",
         aliases=["bj"],
-        help="Play visual blackjack. Usage: ,blackjack <amount>",
+        help="Play blackjack. Usage: ,blackjack <amount>",
     )
     async def blackjack(self, ctx, amount: int):
         reference = await self.begin_game(
@@ -1162,14 +1175,11 @@ class Economy(commands.Cog):
                     f"You received {money(winnings)}."
                 )
 
-            embed, file = view.render(
-                reveal=True,
-                result=result,
-            )
-
             return await ctx.send(
-                embed=embed,
-                file=file,
+                embed=view.display(
+                    reveal=True,
+                    result=result,
+                ),
                 view=view,
             )
 
@@ -1180,25 +1190,19 @@ class Economy(commands.Cog):
             for child in view.children:
                 child.disabled = True
 
-            embed, file = view.render(
-                reveal=True,
-                result=(
-                    f"Dealer has blackjack. "
-                    f"You lost {money(amount)}."
-                ),
-            )
-
             return await ctx.send(
-                embed=embed,
-                file=file,
+                embed=view.display(
+                    reveal=True,
+                    result=(
+                        f"Dealer has blackjack. "
+                        f"You lost {money(amount)}."
+                    ),
+                ),
                 view=view,
             )
 
-        embed, file = view.render()
-
         await ctx.send(
-            embed=embed,
-            file=file,
+            embed=view.display(),
             view=view,
         )
 
