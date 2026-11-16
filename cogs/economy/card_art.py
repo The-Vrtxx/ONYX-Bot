@@ -1,5 +1,5 @@
 
-"""Pillow-based card table artwork for the ONYX blackjack game."""
+"""Pillow-based playing card artwork for ONYX Blackjack."""
 
 from io import BytesIO
 
@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 WIDTH, HEIGHT = 1500, 900
+
 BG = (7, 14, 23)
 FELT = (8, 67, 61)
 GOLD = (216, 179, 94)
@@ -142,7 +143,7 @@ def render_blackjack_png(
     player_total,
     dealer_total,
 ):
-    """Return a PNG byte string showing both blackjack hands."""
+    """Return a PNG showing both blackjack hands."""
 
     image = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(image)
@@ -179,11 +180,23 @@ def render_blackjack_png(
     )
 
     def draw_hand(cards, y, hidden_index=None):
-        count = len(cards)
         card_width = 142
+        card_height = 208
         gap = 22
+        max_cards = 8
 
-        total_width = count * card_width + max(0, count - 1) * gap
+        # Keep long hands inside the artwork.
+        cards = cards[:max_cards]
+
+        if len(cards) > 6:
+            gap = 8
+            card_width = 130
+
+        total_width = (
+            len(cards) * card_width
+            + max(0, len(cards) - 1) * gap
+        )
+
         start_x = (WIDTH - total_width) // 2
 
         for index, card in enumerate(cards):
