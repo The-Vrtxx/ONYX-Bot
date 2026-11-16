@@ -14,6 +14,11 @@ from currency_system import (
 )
 
 from cogs.economy.games._streaks import cancel_streak_round
+from cogs.economy.games._controls import (
+    get_arcade_config,
+    game_is_enabled,
+    validate_wager,
+)
 
 
 COLOR = discord.Color.from_rgb(25, 190, 190)
@@ -52,13 +57,41 @@ async def balance_line(bot, user_id):
 
 async def place_wager(bot, user_id, amount, source):
     """Validate and deduct a normal game wager."""
-    amount = int(amount)
+
+    try:
+        amount = int(amount)
+    except (TypeError, ValueError):
+        return {
+            "ok": False,
+            "error": "Enter a valid wager amount.",
+        }
 
     if amount <= 0 or amount > MAX_CREDITS:
         return {
             "ok": False,
             "error": "Enter a valid positive wager.",
         }
+
+    # The source names used by the game commands are, for example,
+    # blackjack_wager, slots_wager, dice_wager, and betflip_wager.
+    game = str(source).removesuffix("_wager").casefold()
+
+    if game not in {"blackjack", "slots", "dice", "betflip"}:
+        return {
+            "ok": False,
+            "error": "This arcade game is not recognized.",
+        }
+
+    if not await game_is_enabled(bot, game):
+        return {
+            "ok": False,
+            "error": f"ONYX {game.title()} is currently disabled.",
+        }
+
+    validation = await validate_wager(bot, amount)
+
+    if not validation.get("ok"):
+        return validation
 
     async with bot.db.pool.acquire() as conn:
         async with conn.transaction():
@@ -74,16 +107,24 @@ async def place_wager(bot, user_id, amount, source):
                     "error": "The ONYX economy is disabled.",
                 }
 
-            if (
-                amount < int(settings["min_bet"])
-                or amount > int(settings["max_bet"])
-            ):
+            # Preserve the original economy limits as an additional
+            # safety boundary. Website limits may be more restrictive.
+            minimum = max(
+                int(settings["min_bet"]),
+                int(validation["config"]["minimum_wager"]),
+            )
+
+            maximum = min(
+                int(settings["max_bet"]),
+                int(validation["config"]["maximum_wager"]),
+            )
+
+            if amount < minimum or amount > maximum:
                 return {
                     "ok": False,
                     "error": (
-                        f"Bets must be between "
-                        f"{int(settings['min_bet']):,} and "
-                        f"{int(settings['max_bet']):,} Credits."
+                        f"Bets must be between {minimum:,} and "
+                        f"{maximum:,} Credits."
                     ),
                 }
 
@@ -104,6 +145,7 @@ async def pay_out(
     reference=None,
 ):
     """Pay winnings using an idempotent transaction reference."""
+
     amount = int(amount)
 
     if amount <= 0:
@@ -117,6 +159,27 @@ async def pay_out(
             "ok": False,
             "error": "Payout exceeds the maximum Credits limit.",
         }
+
+    # Refunds and pushes return money already deducted from the player.
+    # They must not be blocked by the configured winnings limit.
+    source_name = str(source).casefold()
+    is_return = (
+        source_name.endswith("_refund")
+        or source_name.endswith("_push")
+    )
+
+    if not is_return:
+        config = await get_arcade_config(bot)
+        maximum_payout = int(config["maximum_payout"])
+
+        if amount > maximum_payout:
+            return {
+                "ok": False,
+                "error": (
+                    "This payout exceeds the current ONYX Arcade "
+                    "maximum payout limit."
+                ),
+            }
 
     reference = str(reference or uuid.uuid4().hex)
 
@@ -169,6 +232,7 @@ class PlayerView(discord.ui.View):
 
     async def interaction_check(self, interaction):
         """Prevent other members from using another player's game."""
+
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 "This game belongs to another player.",
@@ -193,6 +257,7 @@ class PlayerView(discord.ui.View):
 
     def disable_controls(self):
         """Disable every button in this game."""
+
         for child in self.children:
             child.disabled = True
 
@@ -235,6 +300,7 @@ class PlayerView(discord.ui.View):
 
     async def on_timeout(self):
         """Refund or release an unfinished game when its controls expire."""
+
         try:
             await self.refund()
         except Exception:
