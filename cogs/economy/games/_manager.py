@@ -54,7 +54,7 @@ class ArcadeManager:
         game = str(game_view.game)
         streak_id = getattr(game_view, "streak_id", None)
 
-        # A push returns the wager and leaves a continued streak unchanged.
+        # A push leaves a continued streak pot unchanged.
         if outcome == "push":
             if streak_id:
                 await cancel_streak_round(
@@ -149,9 +149,6 @@ class ArcadeManager:
             )
 
             if not updated.get("ok"):
-                # If the next payout would exceed the Credits cap,
-                # return the streak to its active state so it can be
-                # cashed out safely.
                 await cancel_streak_round(
                     self.bot,
                     user_id,
@@ -318,8 +315,55 @@ class ArcadeManager:
                     streak_id=streak_id,
                 )
 
-                # BlackjackView automatically disables Double Down
-                # during streak rounds.
+                player_total = view.total(player)
+                dealer_total = view.total(dealer)
+
+                # A natural in a streak round settles immediately.
+                if player_total == 21 and dealer_total == 21:
+                    view.finished = True
+                    view.disable_controls()
+
+                    await self.result_handler(
+                        interaction,
+                        view,
+                        "push",
+                        wager,
+                        (
+                            "🤝 Both you and the dealer have blackjack. "
+                            "Your streak pot is unchanged."
+                        ),
+                    )
+
+                    return
+
+                if player_total == 21:
+                    view.finished = True
+                    view.disable_controls()
+
+                    await self.result_handler(
+                        interaction,
+                        view,
+                        "win",
+                        wager * 2,
+                        "🌟 **Natural Blackjack!** You won this streak round.",
+                    )
+
+                    return
+
+                if dealer_total == 21:
+                    view.finished = True
+                    view.disable_controls()
+
+                    await self.result_handler(
+                        interaction,
+                        view,
+                        "loss",
+                        0,
+                        "Dealer has blackjack. You lost this streak round.",
+                    )
+
+                    return
+
                 return await edit_game_message(
                     interaction,
                     embed=view.display(),
@@ -376,8 +420,7 @@ class ArcadeManager:
             )
 
         except Exception:
-            # If the game could not be displayed, restore the streak
-            # to its active state instead of leaving it locked.
+            # If the game could not be displayed, restore the streak.
             await cancel_streak_round(
                 self.bot,
                 interaction.user.id,
