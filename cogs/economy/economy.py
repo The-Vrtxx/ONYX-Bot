@@ -14,6 +14,7 @@ from currency_system import (
     get_credit_balance,
     grant_credits,
     spend_credits,
+    update_discord_user_profile,
 )
 
 from cogs.economy._common import (
@@ -88,9 +89,27 @@ async def settings_for(bot):
         )
 
 
-async def claim_reward(bot, user_id, action, amount, cooldown):
+async def claim_reward(
+    bot,
+    user_id,
+    action,
+    amount,
+    cooldown,
+    display_name=None,
+    username=None,
+):
+    """Claim a bot reward and refresh the user's global Discord name."""
+
     async with bot.db.pool.acquire() as conn:
         async with conn.transaction():
+
+            await update_discord_user_profile(
+                conn,
+                user_id,
+                display_name=display_name,
+                username=username,
+            )
+
             claim = await conn.fetchrow("""
                 INSERT INTO onyx_economy_cooldowns
                     (user_id, action, next_claim_at)
@@ -288,6 +307,24 @@ class Economy(commands.Cog):
                         "Recipient wallet transfer failed."
                     )
 
+                await update_discord_user_profile(
+                    conn,
+                    ctx.author.id,
+                    display_name=(
+                        ctx.author.global_name or ctx.author.name
+                    ),
+                    username=ctx.author.name,
+                )
+
+                await update_discord_user_profile(
+                    conn,
+                    member.id,
+                    display_name=(
+                        member.global_name or member.name
+                    ),
+                    username=member.name,
+                )
+
         await ctx.send(
             embed=make_embed(
                 "💸 Credits Transferred",
@@ -331,6 +368,10 @@ class Economy(commands.Cog):
             action,
             amount,
             cooldown,
+            display_name=(
+                ctx.author.global_name or ctx.author.name
+            ),
+            username=ctx.author.name,
         )
 
         if not success:
