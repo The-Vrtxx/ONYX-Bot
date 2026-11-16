@@ -29,7 +29,9 @@ class QuickGameView(PlayerView):
         game = str(game).casefold()
 
         if game not in {"dice", "betflip"}:
-            raise ValueError("QuickGameView only supports Dice and Betflip.")
+            raise ValueError(
+                "QuickGameView only supports Dice and Betflip."
+            )
 
         super().__init__(
             bot,
@@ -38,24 +40,27 @@ class QuickGameView(PlayerView):
             game,
             reference,
             timeout=90,
+            streak_id=streak_id,
         )
 
         self.result_handler = result_handler
-        self.streak_id = streak_id
 
         # Only show the buttons belonging to this game.
         for child in self.children:
             if child.custom_id == "onyx_quick_heads":
                 child.disabled = game != "betflip"
+
             elif child.custom_id == "onyx_quick_tails":
                 child.disabled = game != "betflip"
+
             elif child.custom_id == "onyx_quick_high":
                 child.disabled = game != "dice"
+
             elif child.custom_id == "onyx_quick_low":
                 child.disabled = game != "dice"
 
     async def settle(self, interaction, choice):
-        """Resolve the game and hand the result to the economy handler."""
+        """Resolve the game and hand the result to the economy manager."""
 
         if self.finished or self.settling:
             return await interaction.response.send_message(
@@ -65,77 +70,83 @@ class QuickGameView(PlayerView):
 
         self.settling = True
 
-        if self.game == "betflip":
-            result = random.choice(("heads", "tails"))
-            won = choice == result
-            result_text = result.title()
-            title = "🪙 ONYX BETFLIP"
+        try:
+            if self.game == "betflip":
+                result = random.choice(("heads", "tails"))
+                won = choice == result
+                result_text = result.title()
+                title = "🪙 ONYX BETFLIP"
 
-        else:
-            result = random.randint(1, 6)
-            won = (
-                result >= 4
-                if choice == "high"
-                else result <= 3
-            )
-            result_text = str(result)
-            title = "🎲 ONYX DICE"
+            else:
+                result = random.randint(1, 6)
+                won = (
+                    result >= 4
+                    if choice == "high"
+                    else result <= 3
+                )
+                result_text = str(result)
+                title = "🎲 ONYX DICE"
 
-        self.finished = True
-        self.settling = False
-        self.disable_controls()
+            self.finished = True
+            self.disable_controls()
 
-        if won:
-            payout = self.bet * 2
+            if won:
+                payout = self.bet * 2
 
-            message = (
-                f"🎉 **You won {money(payout)}!**\n"
-                f"Result: **{result_text}**"
-            )
+                message = (
+                    f"🎉 **You won {money(payout)}!**\n"
+                    f"Result: **{result_text}**"
+                )
 
-            if self.result_handler:
-                await self.result_handler(
-                    interaction,
-                    self,
-                    "win",
+                if self.result_handler:
+                    await self.result_handler(
+                        interaction,
+                        self,
+                        "win",
+                        payout,
+                        message,
+                    )
+                    return
+
+                paid = await pay_out(
+                    self.bot,
+                    self.user_id,
                     payout,
-                    message,
+                    f"{self.game}_payout",
+                    self.reference,
                 )
-                return
 
-            await pay_out(
-                self.bot,
-                self.user_id,
-                payout,
-                f"{self.game}_payout",
-                self.reference,
+                if not paid or not paid.get("ok"):
+                    message += (
+                        "\n\n⚠️ Your payout needs administrator review."
+                    )
+
+            else:
+                message = (
+                    f"❌ You lost **{money(self.bet)}**.\n"
+                    f"Result: **{result_text}**"
+                )
+
+                if self.result_handler:
+                    await self.result_handler(
+                        interaction,
+                        self,
+                        "loss",
+                        0,
+                        message,
+                    )
+                    return
+
+            await interaction.response.edit_message(
+                embed=make_embed(
+                    title,
+                    message,
+                ),
+                view=self,
             )
 
-        else:
-            payout = 0
-
-            message = (
-                f"❌ You lost **{money(self.bet)}**.\n"
-                f"Result: **{result_text}**"
-            )
-
-            if self.result_handler:
-                await self.result_handler(
-                    interaction,
-                    self,
-                    "loss",
-                    0,
-                    message,
-                )
-                return
-
-        await interaction.response.edit_message(
-            embed=make_embed(
-                title,
-                message,
-            ),
-            view=self,
-        )
+        finally:
+            self.settling = False
 
     @discord.ui.button(
         label="Heads",
