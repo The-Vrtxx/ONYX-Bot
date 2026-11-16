@@ -12,6 +12,7 @@ HELP_FOLDER_LABELS = {
     "administration": "Administration",
     "community": "Community",
     "core": "Utilities & Integrations",
+    "economy": "Economy",
     "integrations": "Utilities & Integrations",
     "leveling": "Leveling & Progression",
     "logging": "Logging & Audit",
@@ -22,9 +23,18 @@ HELP_FOLDER_LABELS = {
     "voice": "Utilities & Integrations",
 }
 
+
 HELP_MODULE_OVERRIDES = {
     "automod": "Moderation",
 }
+
+
+def folder_category_label(folder):
+    """Use a friendly label or automatically format a new cog folder name."""
+    return HELP_FOLDER_LABELS.get(
+        folder,
+        folder.replace("_", " ").replace("-", " ").title()
+    )
 
 
 def is_owner_restricted(command):
@@ -162,7 +172,7 @@ class WebsiteSync(commands.Cog):
 
                 category = HELP_MODULE_OVERRIDES.get(
                     module,
-                    HELP_FOLDER_LABELS.get(folder, "Other")
+                    folder_category_label(folder)
                 )
             else:
                 module = "core"
