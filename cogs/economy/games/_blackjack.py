@@ -53,12 +53,16 @@ class BlackjackView(PlayerView):
             "blackjack",
             reference,
             timeout=90,
+            streak_id=streak_id,
         )
 
         self.player = player
         self.dealer = dealer
         self.result_handler = result_handler
-        self.streak_id = streak_id
+
+        # Double Down is unavailable when risking an existing streak pot.
+        if self.streak_id:
+            self.double_down.disabled = True
 
     @classmethod
     def draw(cls):
@@ -141,12 +145,12 @@ class BlackjackView(PlayerView):
             )
 
         if not self.finished:
-            embed.set_footer(
-                text=(
-                    "Hit to draw • Stand to hold • "
-                    "Double Down to double your wager"
-                )
-            )
+            footer = "Hit to draw • Stand to hold"
+
+            if not self.streak_id:
+                footer += " • Double Down to double your wager"
+
+            embed.set_footer(text=footer)
         else:
             embed.set_footer(
                 text="ONYX Arcade • Blackjack"
@@ -159,19 +163,18 @@ class BlackjackView(PlayerView):
         interaction,
         reveal=False,
         result="",
-        view=None,
     ):
         await interaction.response.edit_message(
             embed=self.display(
                 reveal=reveal,
                 result=result,
             ),
-            view=self if view is None else view,
+            view=self,
             attachments=[],
         )
 
     async def handle_win(self, interaction, payout, result):
-        """Send a win to the shared economy handler when provided."""
+        """Send a win through the shared settlement handler."""
 
         if self.result_handler:
             await self.result_handler(
@@ -183,13 +186,16 @@ class BlackjackView(PlayerView):
             )
             return
 
-        await pay_out(
+        paid = await pay_out(
             self.bot,
             self.user_id,
             payout,
             "blackjack_payout",
             self.reference,
         )
+
+        if not paid or not paid.get("ok"):
+            result += "\n\n⚠️ Your payout needs administrator review."
 
         await self.update_message(
             interaction,
@@ -198,7 +204,7 @@ class BlackjackView(PlayerView):
         )
 
     async def handle_loss(self, interaction, result):
-        """Send a loss to the shared economy handler when provided."""
+        """Send a loss through the shared settlement handler."""
 
         if self.result_handler:
             await self.result_handler(
@@ -221,69 +227,77 @@ class BlackjackView(PlayerView):
         interaction,
         dealer_plays=True,
     ):
-        if self.finished:
+        if self.finished or self.settling:
             return
 
-        if dealer_plays:
-            while self.total(self.dealer) < 17:
-                self.dealer.append(self.draw())
+        self.settling = True
 
-        player_total = self.total(self.player)
-        dealer_total = self.total(self.dealer)
+        try:
+            if dealer_plays:
+                while self.total(self.dealer) < 17:
+                    self.dealer.append(self.draw())
 
-        self.finished = True
-        self.disable_controls()
+            player_total = self.total(self.player)
+            dealer_total = self.total(self.dealer)
 
-        if player_total > 21:
-            return await self.handle_loss(
-                interaction,
-                f"💥 Bust! You lost {money(self.bet)}.",
-            )
+            self.finished = True
+            self.disable_controls()
 
-        if dealer_total > 21 or player_total > dealer_total:
-            returned = self.bet * 2
-
-            return await self.handle_win(
-                interaction,
-                returned,
-                f"🎉 You won! **{money(returned)}** returned.",
-            )
-
-        if player_total == dealer_total:
-            if self.result_handler:
-                await self.result_handler(
+            if player_total > 21:
+                return await self.handle_loss(
                     interaction,
-                    self,
-                    "push",
-                    self.bet,
-                    (
-                        f"🤝 Push! Your **{money(self.bet)}** "
-                        "wager was returned."
-                    ),
+                    f"💥 Bust! You lost {money(self.bet)}.",
                 )
-                return
 
-            await pay_out(
-                self.bot,
-                self.user_id,
-                self.bet,
-                "blackjack_push",
-                self.reference,
-            )
+            if dealer_total > 21 or player_total > dealer_total:
+                returned = self.bet * 2
 
-            return await self.update_message(
-                interaction,
-                reveal=True,
-                result=(
+                return await self.handle_win(
+                    interaction,
+                    returned,
+                    f"🎉 You won! **{money(returned)}** returned.",
+                )
+
+            if player_total == dealer_total:
+                result = (
                     f"🤝 Push! Your **{money(self.bet)}** "
                     "wager was returned."
-                ),
+                )
+
+                if self.result_handler:
+                    await self.result_handler(
+                        interaction,
+                        self,
+                        "push",
+                        self.bet,
+                        result,
+                    )
+                    return
+
+                paid = await pay_out(
+                    self.bot,
+                    self.user_id,
+                    self.bet,
+                    "blackjack_push",
+                    self.reference,
+                )
+
+                if not paid or not paid.get("ok"):
+                    result += "\n\n⚠️ Your wager return needs review."
+
+                return await self.update_message(
+                    interaction,
+                    reveal=True,
+                    result=result,
+                )
+
+            return await self.handle_loss(
+                interaction,
+                f"Dealer wins. You lost {money(self.bet)}.",
             )
 
-        return await self.handle_loss(
-            interaction,
-            f"Dealer wins. You lost {money(self.bet)}.",
-        )
+        finally:
+            self.settling = False
 
     @discord.ui.button(
         label="Hit",
@@ -291,6 +305,9 @@ class BlackjackView(PlayerView):
         style=discord.ButtonStyle.primary,
     )
     async def hit(self, interaction, button):
+        if self.finished or self.settling:
+            return
+
         self.player.append(self.draw())
 
         total = self.total(self.player)
@@ -317,11 +334,20 @@ class BlackjackView(PlayerView):
         style=discord.ButtonStyle.success,
     )
     async def double_down(self, interaction, button):
+        if self.streak_id:
+            return await interaction.response.send_message(
+                "Double Down is unavailable during a streak round.",
+                ephemeral=True,
+            )
+
         if len(self.player) != 2:
             return await interaction.response.send_message(
                 "Double Down is only available on your first turn.",
                 ephemeral=True,
             )
+
+        if self.finished or self.settling:
+            return
 
         result = await place_wager(
             self.bot,
