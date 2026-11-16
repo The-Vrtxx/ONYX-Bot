@@ -91,20 +91,16 @@ class StreakDecisionView(discord.ui.View):
         )
 
         if not limits["can_continue"]:
-            if not self.bot:
-                reason = "Streak continuation is unavailable."
-            elif wins >= limits["maximum_wins"]:
+            if wins >= limits["maximum_wins"]:
                 reason = (
                     f"You reached the maximum of "
                     f"{limits['maximum_wins']} streak wins."
                 )
-            elif not limits["can_continue"]:
+            else:
                 reason = (
                     "Streak continuation is disabled or the next "
                     "payout exceeds the current limit."
                 )
-            else:
-                reason = "Streak continuation is unavailable."
 
             description += (
                 f"\n\n⚠️ **Cashout required.** {reason}"
@@ -127,9 +123,17 @@ class StreakDecisionView(discord.ui.View):
         self.processing = True
 
         try:
+            display_name = (
+                getattr(interaction.user, "global_name", None)
+                or interaction.user.name
+            )
+            username = interaction.user.name
+
             result = await cash_out_streak(
                 self.bot,
                 self.user_id,
+                display_name=display_name,
+                username=username,
             )
 
             if not result.get("ok"):
