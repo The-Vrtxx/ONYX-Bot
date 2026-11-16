@@ -1,6 +1,7 @@
 
 """ONYX global Credits economy and arcade games."""
 
+import asyncio
 import random
 import uuid
 from datetime import datetime, timezone
@@ -342,9 +343,44 @@ class BetChoiceView(PlayerView):
 
 
 class SlotsView(PlayerView):
+    """Animated ONYX slot machine."""
+
+    SPIN_FRAMES = 5
+    FRAME_DELAY = 0.45
+    STOP_DELAY = 0.55
 
     def __init__(self, bot, user_id, bet, reference):
-        super().__init__(bot, user_id, bet, "slots", reference)
+        super().__init__(
+            bot,
+            user_id,
+            bet,
+            "slots",
+            reference,
+            timeout=90,
+        )
+        self.spinning = False
+
+    def slot_embed(self, reels, status=""):
+        display = "　|　".join(
+            f"**{symbol}**" for symbol in reels
+        )
+
+        embed = make_embed(
+            "🎰 ONYX ARCADE SLOTS",
+            (
+                f"**Wager:** {money(self.bet)}\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"# {display}\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"{status}"
+            ),
+        )
+
+        embed.set_footer(
+            text="ONYX Arcade • Slot Machine"
+        )
+
+        return embed
 
     @discord.ui.button(
         label="Spin",
@@ -352,23 +388,84 @@ class SlotsView(PlayerView):
         style=discord.ButtonStyle.success,
     )
     async def spin(self, interaction, button):
-        reels = [
+        if self.spinning or self.finished:
+            return await interaction.response.send_message(
+                "This slot machine is already spinning or finished.",
+                ephemeral=True,
+            )
+
+        self.spinning = True
+
+        # Determine the result before the animation begins.
+        final_reels = [
             random.choice(SLOT_SYMBOLS)
             for _ in range(3)
         ]
 
-        if reels == ["7️⃣", "7️⃣", "7️⃣"]:
+        if final_reels == ["7️⃣", "7️⃣", "7️⃣"]:
             multiplier = 10
-        elif len(set(reels)) == 1:
+        elif len(set(final_reels)) == 1:
             multiplier = 5
-        elif len(set(reels)) == 2:
+        elif len(set(final_reels)) == 2:
             multiplier = 2
         else:
             multiplier = 0
 
+        # Lock the game against repeat spins.
         self.finished = True
         button.disabled = True
 
+        await interaction.response.edit_message(
+            embed=self.slot_embed(
+                ["❔", "❔", "❔"],
+                "🎰 **Spinning...**",
+            ),
+            view=self,
+        )
+
+        # Animate the reels.
+        for _ in range(self.SPIN_FRAMES):
+            animated_reels = [
+                random.choice(SLOT_SYMBOLS)
+                for _ in range(3)
+            ]
+
+            await interaction.edit_original_response(
+                embed=self.slot_embed(
+                    animated_reels,
+                    "🎰 **Reels spinning...**",
+                ),
+                view=self,
+            )
+
+            await asyncio.sleep(self.FRAME_DELAY)
+
+        # Reveal the predetermined result one reel at a time.
+        displayed_reels = [
+            random.choice(SLOT_SYMBOLS)
+            for _ in range(3)
+        ]
+
+        for stopped in range(1, 4):
+            displayed_reels[stopped - 1] = final_reels[stopped - 1]
+
+            status = (
+                f"🎰 **Reel {stopped} stopped!**"
+                if stopped < 3
+                else "🎰 **All reels stopped!**"
+            )
+
+            await interaction.edit_original_response(
+                embed=self.slot_embed(
+                    displayed_reels,
+                    status,
+                ),
+                view=self,
+            )
+
+            await asyncio.sleep(self.STOP_DELAY)
+
+        # Pay the result selected before the animation.
         if multiplier:
             winnings = self.bet * multiplier
 
@@ -381,19 +478,30 @@ class SlotsView(PlayerView):
             )
 
             result = (
-                f"🎉 **{money(winnings)}** payout "
-                f"({multiplier}x)!"
-            )
-        else:
-            result = (
-                f"No win this time. You lost {money(self.bet)}."
+                f"🎉 **YOU WON!**\n\n"
+                f"Multiplier: **{multiplier}x**\n"
+                f"Payout: **{money(winnings)}**"
             )
 
-        await interaction.response.edit_message(
-            embed=make_embed(
-                "🎰 ONYX Slots",
-                f"# {' | '.join(reels)}\n\n{result}",
-            ),
+            color = discord.Color.gold()
+
+        else:
+            result = (
+                f"❌ **No win this time.**\n\n"
+                f"You lost **{money(self.bet)}**."
+            )
+
+            color = discord.Color.red()
+
+        final_embed = self.slot_embed(
+            final_reels,
+            result,
+        )
+
+        final_embed.color = color
+
+        await interaction.edit_original_response(
+            embed=final_embed,
             view=self,
         )
 
