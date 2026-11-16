@@ -8,6 +8,8 @@ Runtime enforcement is handled by the Discord bot.
 import json
 from aiohttp import web
 
+from owner_credit_ledger_api import register_credit_ledger_routes
+
 
 DEFAULT_CONFIG = {
     "enabled": True,
@@ -397,4 +399,11 @@ def register_arcade_routes(app, require_user, bot_owner_id):
     app.router.add_get(
         "/api/owner/arcade/logs",
         admin_logs
+    )
+
+    # OWNER-ONLY CREDIT EARNINGS LEDGER
+    register_credit_ledger_routes(
+        app,
+        require_user,
+        bot_owner_id
     )
