@@ -4,7 +4,12 @@
 from aiohttp import web
 
 
-BOT_REWARD_PREFIX = "reward_"
+BOT_REWARD_SOURCES = {
+    "reward_daily",
+    "reward_weekly",
+    "reward_work",
+    "reward_beg",
+}
 
 
 def register_credit_ledger_routes(app, require_user, bot_owner_id):
@@ -31,9 +36,9 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
                     COALESCE(SUM(amount), 0) AS total_earned
                 FROM onyx_credit_transactions
                 WHERE transaction_type = 'earn'
-                  AND LEFT(source, 7) = 'reward_'
+                  AND source = ANY($1::text[])
                   AND amount > 0
-            """)
+            """, list(BOT_REWARD_SOURCES))
 
             by_source = await conn.fetch("""
                 SELECT
@@ -42,11 +47,11 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
                     COALESCE(SUM(amount), 0) AS total_earned
                 FROM onyx_credit_transactions
                 WHERE transaction_type = 'earn'
-                  AND LEFT(source, 7) = 'reward_'
+                  AND source = ANY($1::text[])
                   AND amount > 0
                 GROUP BY source
                 ORDER BY total_earned DESC
-            """)
+            """, list(BOT_REWARD_SOURCES))
 
         return web.json_response({
             "total_earned": int(row["total_earned"]),
@@ -66,11 +71,13 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
         await require_owner(request)
 
         try:
-            limit = int(request.query.get("limit", "50"))
-            limit = max(1, min(limit, 100))
+            limit = max(
+                1,
+                min(int(request.query.get("limit", "50")), 100)
+            )
 
-            before = request.query.get("before")
-            before = int(before) if before else None
+            before_value = request.query.get("before")
+            before = int(before_value) if before_value else None
 
             user_id = request.query.get("user_id", "").strip()
             source = request.query.get("source", "").strip().lower()
@@ -79,12 +86,7 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
             if user_id and not user_id.isdigit():
                 raise ValueError()
 
-            if source and source not in {
-                "reward_daily",
-                "reward_weekly",
-                "reward_work",
-                "reward_beg"
-            }:
+            if source and source not in BOT_REWARD_SOURCES:
                 raise ValueError()
 
             if before is not None and before < 1:
@@ -98,14 +100,16 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
 
         conditions = [
             "t.transaction_type = 'earn'",
-            "LEFT(t.source, 7) = 'reward_'",
+            "t.source = ANY($1::text[])",
             "t.amount > 0"
         ]
-        values = []
 
-        def add_condition(sql, value):
+        values = [list(BOT_REWARD_SOURCES)]
+
+        def add_condition(condition, value):
             values.append(value)
-            conditions.append(sql.replace("?", f"${len(values)}"))
+            placeholder = f"${len(values)}"
+            conditions.append(condition.replace("?", placeholder))
 
         if before is not None:
             add_condition("t.id < ?", before)
@@ -117,20 +121,23 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
             add_condition("t.source = ?", source)
 
         if search:
-            add_condition(
-                "(CAST(t.user_id AS TEXT) = ? OR "
-                "LOWER(COALESCE(p.display_name, '')) LIKE ?)",
-                search
-            )
             values.append("%" + search.lower() + "%")
-            conditions[-1] = (
-                conditions[-1].replace(
-                    f"${len(values)-1}",
-                    f"${len(values)-1}"
-                )
+            search_placeholder = f"${len(values)}"
+
+            values.append(search)
+            id_placeholder = f"${len(values)}"
+
+            conditions.append(
+                "("
+                f"LOWER(COALESCE(p.display_name, '')) LIKE {search_placeholder} "
+                f"OR CAST(t.user_id AS TEXT) = {id_placeholder}"
+                ")"
             )
 
         where_clause = " AND ".join(conditions)
+
+        values.append(limit + 1)
+        limit_placeholder = f"${len(values)}"
 
         query = f"""
             SELECT
@@ -141,16 +148,15 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
                 t.source,
                 t.description,
                 t.created_at,
-                p.display_name
+                p.display_name,
+                p.username
             FROM onyx_credit_transactions t
             LEFT JOIN onyx_discord_user_profiles p
                 ON p.user_id = t.user_id
             WHERE {where_clause}
             ORDER BY t.id DESC
-            LIMIT ${len(values) + 1}
+            LIMIT {limit_placeholder}
         """
-
-        values.append(limit + 1)
 
         async with request.app["db"].acquire() as conn:
             rows = await conn.fetch(query, *values)
@@ -165,6 +171,7 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
                 "id": int(row["id"]),
                 "user_id": str(row["user_id"]),
                 "display_name": row["display_name"] or None,
+                "username": row["username"] or None,
                 "amount": int(row["amount"]),
                 "balance_after": int(row["balance_after"]),
                 "source": row["source"],
@@ -187,6 +194,7 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
         "/api/owner/credits/summary",
         summary
     )
+
     app.router.add_get(
         "/api/owner/credits/transactions",
         transactions
