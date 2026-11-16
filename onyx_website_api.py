@@ -1,4 +1,3 @@
-
 """
 ONYX Website API
 Separate Render web service sharing the bot's PostgreSQL database.
@@ -11,6 +10,7 @@ import hmac
 import base64
 import hashlib
 import secrets
+import logging
 from urllib.parse import urlencode
 
 import aiohttp
@@ -23,10 +23,15 @@ from server_owner_api import register_server_owner_routes, ensure_server_owner_t
 from server_management_api import register_management_routes, ensure_management_tables
 from profile_card_api import register_profile_card_route
 
-from currency_system import ensure_currency_tables, get_credit_balance
+from currency_system import (
+    ensure_currency_tables,
+    get_credit_balance,
+    spend_credits
+)
 
 
-# Legacy seed catalog. Existing owner-dashboard records are never overwritten.
+# LEGACY SEED CATALOG
+# Existing owner-dashboard records are never overwritten.
 SHOP = {
     "frame": {
         "steel": ("Steel Frame", 5, "A clean metallic border."),
@@ -58,7 +63,7 @@ SHOP = {
 }
 
 
-# Category -> (database column, default value)
+# CATEGORY -> (DATABASE COLUMN, DEFAULT VALUE)
 SLOTS = {
     "frame": ("frame_id", "default"),
     "border": ("frame_id", "default"),
@@ -70,7 +75,7 @@ SLOTS = {
     "badge": ("badge_id", "default"),
 }
 
-# Seasonal event items are collectible-only; they cannot be equipped.
+# Seasonal event items are collectible-only.
 COLLECTIBLE_CATEGORIES = {"event"}
 SHOP_CATEGORIES = set(SLOTS) | COLLECTIBLE_CATEGORIES
 
@@ -94,6 +99,7 @@ WEBSITE_ORIGIN = os.environ.get(
     "WEBSITE_ORIGIN", "https://onyxdiscord.com"
 ).rstrip("/")
 PORT = int(os.environ.get("PORT", "8080"))
+
 COOKIE_NAME = "onyx_session"
 STATE_COOKIE = "onyx_oauth_state"
 SESSION_SECONDS = 60 * 60 * 24 * 7
@@ -114,18 +120,26 @@ def signed_value(payload: dict) -> str:
     raw = json.dumps(
         payload, separators=(",", ":"), sort_keys=True
     ).encode()
+
     encoded = b64(raw)
+
     signature = hmac.new(
-        SESSION_SECRET, encoded.encode(), hashlib.sha256
+        SESSION_SECRET,
+        encoded.encode(),
+        hashlib.sha256
     ).digest()
+
     return encoded + "." + b64(signature)
 
 
 def read_signed(value: str):
     try:
         encoded, signature = value.split(".", 1)
+
         expected = hmac.new(
-            SESSION_SECRET, encoded.encode(), hashlib.sha256
+            SESSION_SECRET,
+            encoded.encode(),
+            hashlib.sha256
         ).digest()
 
         if not hmac.compare_digest(expected, unb64(signature)):
@@ -137,6 +151,7 @@ def read_signed(value: str):
             return None
 
         return payload
+
     except Exception:
         return None
 
@@ -159,7 +174,9 @@ def safe_next_path(value):
 
 
 def session_user(request):
-    payload = read_signed(request.cookies.get(COOKIE_NAME, ""))
+    payload = read_signed(
+        request.cookies.get(COOKIE_NAME, "")
+    )
 
     if not payload or not str(payload.get("uid", "")).isdigit():
         return None
@@ -180,7 +197,10 @@ def require_user(request):
 
 
 def json_error(message, status=400):
-    return web.json_response({"error": message}, status=status)
+    return web.json_response(
+        {"error": message},
+        status=status
+    )
 
 
 # CORS / SECURITY HEADERS
@@ -243,7 +263,7 @@ async def ensure_tables(pool):
         )
     """)
 
-    # Safe additions for existing users. Existing equipment is preserved.
+    # Safe additions for existing users.
     await pool.execute("""
         ALTER TABLE onyx_profile_equipped
         ADD COLUMN IF NOT EXISTS background_id TEXT NOT NULL DEFAULT 'default'
@@ -254,7 +274,6 @@ async def ensure_tables(pool):
         ADD COLUMN IF NOT EXISTS badge_id TEXT NOT NULL DEFAULT 'default'
     """)
 
-    # Frames and borders share one equipment slot.
     await pool.execute("""
         ALTER TABLE onyx_profile_equipped
         ADD COLUMN IF NOT EXISTS frame_category TEXT NOT NULL DEFAULT 'frame'
@@ -336,7 +355,7 @@ async def ensure_tables(pool):
         )
     """)
 
-    # Preserve pricing history for future dual-currency edits.
+    # Preserve pricing history.
     await pool.execute("""
         ALTER TABLE onyx_asset_versions
         ADD COLUMN IF NOT EXISTS price_credits INTEGER NOT NULL DEFAULT 0
@@ -352,15 +371,23 @@ async def ensure_tables(pool):
         ON onyx_asset_versions(asset_id, version DESC)
     """)
 
-    # Seed only missing rows. Existing catalog records are authoritative.
+    # Seed only missing rows.
     for category, items in SHOP.items():
         for sort_order, (item_id, item_data) in enumerate(items.items()):
             name, cost, description = item_data
 
             await pool.execute("""
                 INSERT INTO onyx_asset_catalog (
-                    asset_id, category, item_id, display_name, description,
-                    price_tokens, rarity, is_active, is_shop_item, sort_order
+                    asset_id,
+                    category,
+                    item_id,
+                    display_name,
+                    description,
+                    price_tokens,
+                    rarity,
+                    is_active,
+                    is_shop_item,
+                    sort_order
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, 1, 1, $8)
                 ON CONFLICT (category, item_id) DO NOTHING
@@ -382,12 +409,14 @@ async def get_profile_data(pool, user_id):
         async with conn.transaction():
             await conn.execute("""
                 INSERT INTO onyx_prestige_wallet(user_id, tokens)
-                VALUES($1, 0) ON CONFLICT(user_id) DO NOTHING
+                VALUES($1, 0)
+                ON CONFLICT(user_id) DO NOTHING
             """, user_id)
 
             await conn.execute("""
                 INSERT INTO onyx_profile_equipped(user_id)
-                VALUES($1) ON CONFLICT(user_id) DO NOTHING
+                VALUES($1)
+                ON CONFLICT(user_id) DO NOTHING
             """, user_id)
 
             wallet = await conn.fetchrow(
@@ -395,21 +424,34 @@ async def get_profile_data(pool, user_id):
                 user_id
             )
 
-            credit_wallet = await get_credit_balance(conn, user_id)
+            credit_wallet = await get_credit_balance(
+                conn,
+                user_id
+            )
 
             owned_rows = await conn.fetch("""
-                SELECT o.category, o.item_id,
-                       COALESCE(a.display_name, o.item_id) AS display_name
+                SELECT
+                    o.category,
+                    o.item_id,
+                    COALESCE(a.display_name, o.item_id) AS display_name
                 FROM onyx_prestige_owned o
                 LEFT JOIN onyx_asset_catalog a
-                  ON a.category=o.category AND a.item_id=o.item_id
+                  ON a.category=o.category
+                 AND a.item_id=o.item_id
                 WHERE o.user_id=$1
                 ORDER BY o.category, o.item_id
             """, user_id)
 
             equipped = await conn.fetchrow("""
-                SELECT frame_id, frame_category, theme_id, emblem_id,
-                       effect_id, background_id, title_id, badge_id
+                SELECT
+                    frame_id,
+                    frame_category,
+                    theme_id,
+                    emblem_id,
+                    effect_id,
+                    background_id,
+                    title_id,
+                    badge_id
                 FROM onyx_profile_equipped
                 WHERE user_id=$1
             """, user_id)
@@ -436,10 +478,12 @@ async def get_profile_data(pool, user_id):
 async def health(request):
     try:
         await request.app["db"].fetchval("SELECT 1")
+
         return web.json_response({
             "ok": True,
             "service": "ONYX Website API"
         })
+
     except Exception:
         return json_error("Database unavailable.", 503)
 
@@ -447,7 +491,10 @@ async def health(request):
 # DISCORD LOGIN
 async def login(request):
     state = secrets.token_urlsafe(32)
-    next_path = safe_next_path(request.query.get("next", "/shop/"))
+
+    next_path = safe_next_path(
+        request.query.get("next", "/shop/")
+    )
 
     state_cookie = signed_value({
         "state": state,
@@ -485,7 +532,10 @@ async def login(request):
 async def oauth_callback(request):
     code = request.query.get("code")
     returned_state = request.query.get("state")
-    saved = read_signed(request.cookies.get(STATE_COOKIE, ""))
+
+    saved = read_signed(
+        request.cookies.get(STATE_COOKIE, "")
+    )
 
     if (
         not code
@@ -518,6 +568,7 @@ async def oauth_callback(request):
                 "Content-Type": "application/x-www-form-urlencoded"
             }
         ) as token_response:
+
             if token_response.status != 200:
                 return json_error(
                     "Discord token exchange failed. Please try again.",
@@ -534,6 +585,7 @@ async def oauth_callback(request):
             "https://discord.com/api/users/@me",
             headers=headers
         ) as user_response:
+
             if user_response.status != 200:
                 return json_error(
                     "Could not retrieve your Discord account.",
@@ -546,6 +598,7 @@ async def oauth_callback(request):
             "https://discord.com/api/users/@me/guilds",
             headers=headers
         ) as guild_response:
+
             if guild_response.status != 200:
                 return json_error(
                     "Could not retrieve your Discord servers.",
@@ -555,11 +608,18 @@ async def oauth_callback(request):
             discord_guilds = await guild_response.json()
 
     if not str(discord_user.get("id", "")).isdigit():
-        return json_error("Discord returned an invalid account.", 502)
+        return json_error(
+            "Discord returned an invalid account.",
+            502
+        )
 
     async with request.app["db"].acquire() as conn:
         await conn.execute("""
-            INSERT INTO onyx_web_guilds (user_id, guilds, updated_at)
+            INSERT INTO onyx_web_guilds (
+                user_id,
+                guilds,
+                updated_at
+            )
             VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
             ON CONFLICT (user_id) DO UPDATE SET
                 guilds = EXCLUDED.guilds,
@@ -580,8 +640,13 @@ async def oauth_callback(request):
         "exp": int(time.time()) + SESSION_SECONDS
     })
 
-    next_path = safe_next_path(saved.get("next", "/shop/"))
-    response = web.HTTPFound(WEBSITE_ORIGIN + next_path)
+    next_path = safe_next_path(
+        saved.get("next", "/shop/")
+    )
+
+    response = web.HTTPFound(
+        WEBSITE_ORIGIN + next_path
+    )
 
     response.set_cookie(
         COOKIE_NAME,
@@ -593,7 +658,11 @@ async def oauth_callback(request):
         path="/"
     )
 
-    response.del_cookie(STATE_COOKIE, path="/")
+    response.del_cookie(
+        STATE_COOKIE,
+        path="/"
+    )
+
     return response
 
 
@@ -607,7 +676,10 @@ async def logout(request):
 # CURRENT DISCORD USER
 async def me(request):
     user_id = require_user(request)
-    session = read_signed(request.cookies.get(COOKIE_NAME, "")) or {}
+
+    session = read_signed(
+        request.cookies.get(COOKIE_NAME, "")
+    ) or {}
 
     async with request.app["db"].acquire() as conn:
         wallet = await conn.fetchrow(
@@ -615,7 +687,10 @@ async def me(request):
             user_id
         )
 
-        credit_wallet = await get_credit_balance(conn, user_id)
+        credit_wallet = await get_credit_balance(
+            conn,
+            user_id
+        )
 
     return web.json_response({
         "id": str(user_id),
@@ -688,6 +763,7 @@ async def get_manageable_guilds(request):
         try:
             guild_id = str(guild.get("id", ""))
             permissions = int(guild.get("permissions", "0"))
+
             is_owner = bool(guild.get("owner", False))
             is_admin = bool(permissions & 8)
             can_manage = bool(permissions & 32)
@@ -713,7 +789,9 @@ async def get_manageable_guilds(request):
         except (TypeError, ValueError, AttributeError):
             continue
 
-    manageable.sort(key=lambda guild: guild["name"].lower())
+    manageable.sort(
+        key=lambda guild: guild["name"].lower()
+    )
 
     return web.json_response({
         "guilds": manageable,
@@ -721,10 +799,14 @@ async def get_manageable_guilds(request):
     })
 
 
-# SHOP CATALOG - database is the source of truth
+# SHOP CATALOG - DATABASE IS THE SOURCE OF TRUTH
 async def shop_catalog(request):
     user_id = require_user(request)
-    data = await get_profile_data(request.app["db"], user_id)
+
+    data = await get_profile_data(
+        request.app["db"],
+        user_id
+    )
 
     owned = {
         (item["category"], item["id"])
@@ -735,11 +817,20 @@ async def shop_catalog(request):
 
     async with request.app["db"].acquire() as conn:
         rows = await conn.fetch("""
-            SELECT category, item_id, display_name,
-                   price_tokens, price_credits, currency_mode,
-                   description, rarity, image_url, metadata_json
+            SELECT
+                category,
+                item_id,
+                display_name,
+                price_tokens,
+                price_credits,
+                currency_mode,
+                description,
+                rarity,
+                image_url,
+                metadata_json
             FROM onyx_asset_catalog
-            WHERE is_active=1 AND is_shop_item=1
+            WHERE is_active=1
+              AND is_shop_item=1
             ORDER BY category, sort_order, display_name
         """)
 
@@ -778,18 +869,24 @@ async def shop_catalog(request):
 
         token_cost = int(row["price_tokens"])
         credit_cost = int(row["price_credits"])
-        currency_mode = str(row["currency_mode"] or "tokens")
+        currency_mode = str(
+            row["currency_mode"] or "tokens"
+        )
 
         catalog.append({
             "category": category,
-            "section": "frame" if category in {"frame", "border"} else category,
+            "section": (
+                "frame"
+                if category in {"frame", "border"}
+                else category
+            ),
             "id": item_id,
             "name": row["display_name"],
 
-            # Legacy compatibility for the current shop frontend.
+            # Legacy compatibility.
             "cost": token_cost,
 
-            # New dual-currency pricing fields.
+            # Dual-currency pricing.
             "price_tokens": token_cost,
             "price_credits": credit_cost,
             "currency_mode": currency_mode,
@@ -812,9 +909,7 @@ async def shop_catalog(request):
     })
 
 
-# PURCHASE ITEM
-# Purchases remain Token-only in this stage.
-# Dual-currency purchasing will be enabled in the next API update.
+# PURCHASE ITEM - DUAL CURRENCY
 async def buy_item(request):
     user_id = require_user(request)
 
@@ -837,11 +932,18 @@ async def buy_item(request):
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
+
                 asset = await conn.fetchrow("""
-                    SELECT display_name, price_tokens
+                    SELECT
+                        display_name,
+                        price_tokens,
+                        price_credits,
+                        currency_mode
                     FROM onyx_asset_catalog
-                    WHERE category=$1 AND item_id=$2
-                      AND is_active=1 AND is_shop_item=1
+                    WHERE category=$1
+                      AND item_id=$2
+                      AND is_active=1
+                      AND is_shop_item=1
                 """, category, item_id)
 
                 if not asset:
@@ -851,23 +953,36 @@ async def buy_item(request):
                     )
 
                 name = asset["display_name"]
-                cost = int(asset["price_tokens"])
+                token_cost = int(asset["price_tokens"])
+                credit_cost = int(asset["price_credits"])
 
-                await conn.execute("""
-                    INSERT INTO onyx_prestige_wallet(user_id, tokens)
-                    VALUES($1, 0) ON CONFLICT(user_id) DO NOTHING
-                """, user_id)
+                currency_mode = str(
+                    asset["currency_mode"] or "tokens"
+                ).lower()
 
-                wallet = await conn.fetchrow("""
-                    SELECT tokens
-                    FROM onyx_prestige_wallet
-                    WHERE user_id=$1 FOR UPDATE
-                """, user_id)
+                if currency_mode not in {
+                    "tokens",
+                    "credits",
+                    "both",
+                    "free"
+                }:
+                    return json_error(
+                        "This item's currency configuration is invalid.",
+                        500
+                    )
+
+                if token_cost < 0 or credit_cost < 0:
+                    return json_error(
+                        "This item's price is invalid.",
+                        500
+                    )
 
                 already = await conn.fetchval("""
                     SELECT 1
                     FROM onyx_prestige_owned
-                    WHERE user_id=$1 AND category=$2 AND item_id=$3
+                    WHERE user_id=$1
+                      AND category=$2
+                      AND item_id=$3
                 """, user_id, category, item_id)
 
                 if already:
@@ -876,40 +991,112 @@ async def buy_item(request):
                         409
                     )
 
-                balance = int(wallet["tokens"])
-
-                if balance < cost:
-                    return web.json_response({
-                        "error": "Not enough Prestige Tokens.",
-                        "tokens": balance,
-                        "required": cost
-                    }, status=409)
-
+                # Ensure and lock the Token wallet.
                 await conn.execute("""
-                    UPDATE onyx_prestige_wallet
-                    SET tokens=tokens-$1
-                    WHERE user_id=$2
-                """, cost, user_id)
+                    INSERT INTO onyx_prestige_wallet(user_id, tokens)
+                    VALUES($1, 0)
+                    ON CONFLICT(user_id) DO NOTHING
+                """, user_id)
 
+                wallet = await conn.fetchrow("""
+                    SELECT tokens
+                    FROM onyx_prestige_wallet
+                    WHERE user_id=$1
+                    FOR UPDATE
+                """, user_id)
+
+                remaining_tokens = int(wallet["tokens"])
+
+                # Check Token requirements.
+                if currency_mode in {"tokens", "both"}:
+                    if remaining_tokens < token_cost:
+                        return web.json_response({
+                            "error": "Not enough Prestige Tokens.",
+                            "tokens": remaining_tokens,
+                            "required_tokens": token_cost
+                        }, status=409)
+
+                # Check Credits requirements.
+                credit_wallet = await get_credit_balance(
+                    conn,
+                    user_id
+                )
+
+                remaining_credits = int(
+                    credit_wallet["credits"]
+                )
+
+                if currency_mode in {"credits", "both"}:
+                    if remaining_credits < credit_cost:
+                        return web.json_response({
+                            "error": "Not enough ONYX Credits.",
+                            "credits": remaining_credits,
+                            "required_credits": credit_cost
+                        }, status=409)
+
+                # Deduct Prestige Tokens when required.
+                if currency_mode in {"tokens", "both"}:
+                    await conn.execute("""
+                        UPDATE onyx_prestige_wallet
+                        SET tokens=tokens-$1
+                        WHERE user_id=$2
+                    """, token_cost, user_id)
+
+                    remaining_tokens -= token_cost
+
+                # Deduct ONYX Credits when required.
+                if currency_mode in {"credits", "both"}:
+                    if credit_cost > 0:
+                        result = await spend_credits(
+                            conn,
+                            user_id,
+                            credit_cost,
+                            reason=f"Shop purchase: {name}",
+                            reference=f"{category}:{item_id}"
+                        )
+
+                        if not result.get("ok"):
+                            raise RuntimeError(
+                                "Credit deduction failed."
+                            )
+
+                        remaining_credits = int(
+                            result.get("credits", 0)
+                        )
+
+                # Record ownership.
                 await conn.execute("""
                     INSERT INTO onyx_prestige_owned(
-                        user_id, category, item_id
+                        user_id,
+                        category,
+                        item_id
                     )
                     VALUES($1, $2, $3)
                 """, user_id, category, item_id)
 
-                remaining = balance - cost
-
         return web.json_response({
             "ok": True,
             "message": f"Unlocked {name}.",
-            "tokens": remaining,
+            "tokens": remaining_tokens,
+            "credits": remaining_credits,
+            "currency_mode": currency_mode,
             "category": category,
             "item_id": item_id
         })
 
     except asyncpg.UniqueViolationError:
-        return json_error("You already own this item.", 409)
+        return json_error(
+            "You already own this item.",
+            409
+        )
+
+    except Exception:
+        logging.exception("ONYX shop purchase failed")
+
+        return json_error(
+            "The purchase could not be completed. No currency was charged.",
+            500
+        )
 
 
 # EQUIP COSMETIC
@@ -940,16 +1127,20 @@ async def equip_item(request):
 
     async with request.app["db"].acquire() as conn:
         async with conn.transaction():
+
             await conn.execute("""
                 INSERT INTO onyx_profile_equipped(user_id)
-                VALUES($1) ON CONFLICT(user_id) DO NOTHING
+                VALUES($1)
+                ON CONFLICT(user_id) DO NOTHING
             """, user_id)
 
             if item_id != default_value:
                 asset = await conn.fetchrow("""
                     SELECT 1
                     FROM onyx_asset_catalog
-                    WHERE category=$1 AND item_id=$2 AND is_active=1
+                    WHERE category=$1
+                      AND item_id=$2
+                      AND is_active=1
                 """, category, item_id)
 
                 if not asset:
@@ -961,7 +1152,9 @@ async def equip_item(request):
                 owned = await conn.fetchval("""
                     SELECT 1
                     FROM onyx_prestige_owned
-                    WHERE user_id=$1 AND category=$2 AND item_id=$3
+                    WHERE user_id=$1
+                      AND category=$2
+                      AND item_id=$3
                 """, user_id, category, item_id)
 
                 if not owned:
@@ -972,16 +1165,25 @@ async def equip_item(request):
 
             if category in {"frame", "border"}:
                 selected_category = (
-                    "frame" if item_id == default_value else category
+                    "frame"
+                    if item_id == default_value
+                    else category
                 )
+
                 await conn.execute("""
                     UPDATE onyx_profile_equipped
-                    SET frame_id=$1, frame_category=$2
+                    SET frame_id=$1,
+                        frame_category=$2
                     WHERE user_id=$3
                 """, item_id, selected_category, user_id)
+
             else:
                 await conn.execute(
-                    f"UPDATE onyx_profile_equipped SET {column}=$1 WHERE user_id=$2",
+                    f"""
+                    UPDATE onyx_profile_equipped
+                    SET {column}=$1
+                    WHERE user_id=$2
+                    """,
                     item_id,
                     user_id
                 )
@@ -990,14 +1192,23 @@ async def equip_item(request):
         "ok": True,
         "category": category,
         "equipped": item_id,
-        "section": "frame" if category in {"frame", "border"} else category
+        "section": (
+            "frame"
+            if category in {"frame", "border"}
+            else category
+        )
     })
 
 
 # INVENTORY
 async def inventory(request):
     user_id = require_user(request)
-    data = await get_profile_data(request.app["db"], user_id)
+
+    data = await get_profile_data(
+        request.app["db"],
+        user_id
+    )
+
     return web.json_response(data)
 
 
@@ -1039,10 +1250,15 @@ def create_app():
     app.router.add_get("/auth/discord", login)
     app.router.add_get("/auth/discord/callback", oauth_callback)
     app.router.add_post("/auth/logout", logout)
+
     app.router.add_get("/api/me", me)
     app.router.add_get("/api/developer/access", developer_access)
 
-    register_owner_routes(app, require_user, BOT_OWNER_ID)
+    register_owner_routes(
+        app,
+        require_user,
+        BOT_OWNER_ID
+    )
 
     app.router.add_get("/api/guilds", get_manageable_guilds)
 
@@ -1055,11 +1271,14 @@ def create_app():
     app.router.add_get("/api/inventory", inventory)
 
     register_profile_card_route(app, require_user)
-
     register_command_routes(app)
 
     return app
 
 
 if __name__ == "__main__":
-    web.run_app(create_app(), host="0.0.0.0", port=PORT)
+    web.run_app(
+        create_app(),
+        host="0.0.0.0",
+        port=PORT
+    )
