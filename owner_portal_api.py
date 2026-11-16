@@ -20,14 +20,28 @@ ASSET_CATEGORIES = {
     "frame", "theme", "emblem", "prestige_emblem", "effect", "badge",
     "title", "achievement", "background", "border", "event"
 }
+
 RARITIES = {"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic"}
+CURRENCY_MODES = {"credits", "tokens", "both", "free"}
+
 ASSET_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
+
 EDITABLE_FIELDS = {
-    "display_name", "description", "price_tokens", "rarity", "image_url",
-    "is_active", "is_shop_item", "sort_order", "metadata"
+    "display_name",
+    "description",
+    "price_tokens",
+    "price_credits",
+    "currency_mode",
+    "rarity",
+    "image_url",
+    "is_active",
+    "is_shop_item",
+    "sort_order",
+    "metadata"
 }
 
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
+MAX_PRICE = 2_000_000_000
 
 IMAGE_SIGNATURES = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
@@ -53,6 +67,8 @@ def _asset_dict(row):
         "display_name": row["display_name"],
         "description": row["description"] or "",
         "price_tokens": int(row["price_tokens"] or 0),
+        "price_credits": int(row["price_credits"] or 0),
+        "currency_mode": row["currency_mode"] or "tokens",
         "rarity": row["rarity"] or "Common",
         "image_url": row["image_url"],
         "is_active": bool(row["is_active"]),
@@ -60,8 +76,14 @@ def _asset_dict(row):
         "sort_order": int(row["sort_order"] or 0),
         "version": int(row["version"] or 1),
         "metadata": _json_metadata(row["metadata_json"]),
-        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        "created_at": (
+            row["created_at"].isoformat()
+            if row["created_at"] else None
+        ),
+        "updated_at": (
+            row["updated_at"].isoformat()
+            if row["updated_at"] else None
+        ),
     }
 
 
@@ -102,32 +124,57 @@ def _validate_asset_values(data, creating=False):
 
     if creating or "display_name" in data:
         name = str(data.get("display_name", "")).strip()
+
         if not name or len(name) > 80:
-            raise ValueError("Display name must be between 1 and 80 characters.")
+            raise ValueError(
+                "Display name must be between 1 and 80 characters."
+            )
+
         values["display_name"] = name
 
     if "description" in data or creating:
         description = str(data.get("description", "")).strip()
+
         if len(description) > 500:
             raise ValueError("Description cannot exceed 500 characters.")
+
         values["description"] = description
 
-    if "price_tokens" in data or creating:
-        try:
-            price = int(data.get("price_tokens", 0))
-        except (TypeError, ValueError):
-            raise ValueError("Price must be a whole number.")
+    for field, label in (
+        ("price_tokens", "Prestige Token"),
+        ("price_credits", "ONYX Credit")
+    ):
+        if field in data or creating:
+            try:
+                price = int(data.get(field, 0))
+            except (TypeError, ValueError):
+                raise ValueError(f"{label} price must be a whole number.")
 
-        if price < 0 or price > 2_000_000_000:
+            if price < 0 or price > MAX_PRICE:
+                raise ValueError(
+                    f"{label} price must be between 0 and {MAX_PRICE:,}."
+                )
+
+            values[field] = price
+
+    if "currency_mode" in data or creating:
+        mode = str(
+            data.get("currency_mode", "tokens")
+        ).strip().lower()
+
+        if mode not in CURRENCY_MODES:
             raise ValueError(
-                "Price must be between 0 and 2,000,000,000 tokens."
+                "Currency mode must be credits, tokens, both, or free."
             )
-        values["price_tokens"] = price
+
+        values["currency_mode"] = mode
 
     if "rarity" in data or creating:
         rarity = str(data.get("rarity", "Common")).strip().title()
+
         if rarity not in RARITIES:
             raise ValueError("Choose a valid rarity.")
+
         values["rarity"] = rarity
 
     if "image_url" in data or creating:
@@ -141,7 +188,10 @@ def _validate_asset_values(data, creating=False):
             else:
                 parsed = urlparse(image_url)
 
-                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                if (
+                    parsed.scheme not in {"http", "https"}
+                    or not parsed.netloc
+                ):
                     raise ValueError(
                         "Image URL must be a valid HTTP or HTTPS URL."
                     )
@@ -180,7 +230,9 @@ def _validate_asset_values(data, creating=False):
         encoded = json.dumps(metadata, separators=(",", ":"))
 
         if len(encoded) > 10_000:
-            raise ValueError("Metadata cannot exceed 10,000 characters.")
+            raise ValueError(
+                "Metadata cannot exceed 10,000 characters."
+            )
 
         values["metadata_json"] = encoded
 
@@ -575,7 +627,12 @@ def register_owner_routes(app, require_user, bot_owner_id):
 
         try:
             body = await request.json()
+
+            if not isinstance(body, dict):
+                raise ValueError("Request body must be a JSON object.")
+
             values = _validate_asset_values(body, creating=True)
+
         except (ValueError, TypeError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except Exception:
@@ -588,10 +645,14 @@ def register_owner_routes(app, require_user, bot_owner_id):
             async with conn.transaction():
                 row = await conn.fetchrow("""
                     INSERT INTO onyx_asset_catalog (
-                        asset_id, category, item_id, display_name, description,
-                        price_tokens, rarity, image_url, is_active, is_shop_item,
-                        sort_order, metadata_json
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                        asset_id, category, item_id, display_name,
+                        description, price_tokens, price_credits,
+                        currency_mode, rarity, image_url, is_active,
+                        is_shop_item, sort_order, metadata_json
+                    )
+                    VALUES (
+                        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+                    )
                     ON CONFLICT (asset_id) DO NOTHING
                     RETURNING *
                 """,
@@ -601,6 +662,8 @@ def register_owner_routes(app, require_user, bot_owner_id):
                     values["display_name"],
                     values["description"],
                     values["price_tokens"],
+                    values["price_credits"],
+                    values["currency_mode"],
                     values["rarity"],
                     values["image_url"],
                     values["is_active"],
@@ -618,14 +681,20 @@ def register_owner_routes(app, require_user, bot_owner_id):
                 await conn.execute("""
                     INSERT INTO onyx_asset_versions (
                         asset_id, version, display_name, description,
-                        price_tokens, rarity, image_url, is_active,
-                        is_shop_item, metadata_json, changed_by, change_note
-                    ) VALUES ($1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                        price_tokens, price_credits, currency_mode,
+                        rarity, image_url, is_active, is_shop_item,
+                        metadata_json, changed_by, change_note
+                    )
+                    VALUES (
+                        $1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+                    )
                 """,
                     row["asset_id"],
                     row["display_name"],
                     row["description"],
                     row["price_tokens"],
+                    row["price_credits"],
+                    row["currency_mode"],
                     row["rarity"],
                     row["image_url"],
                     row["is_active"],
@@ -684,7 +753,12 @@ def register_owner_routes(app, require_user, bot_owner_id):
         async with request.app["db"].acquire() as conn:
             async with conn.transaction():
                 current = await conn.fetchrow(
-                    "SELECT * FROM onyx_asset_catalog WHERE asset_id=$1 FOR UPDATE",
+                    """
+                    SELECT *
+                    FROM onyx_asset_catalog
+                    WHERE asset_id=$1
+                    FOR UPDATE
+                    """,
                     asset_id
                 )
 
@@ -718,15 +792,21 @@ def register_owner_routes(app, require_user, bot_owner_id):
                 await conn.execute("""
                     INSERT INTO onyx_asset_versions (
                         asset_id, version, display_name, description,
-                        price_tokens, rarity, image_url, is_active,
-                        is_shop_item, metadata_json, changed_by, change_note
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                        price_tokens, price_credits, currency_mode,
+                        rarity, image_url, is_active, is_shop_item,
+                        metadata_json, changed_by, change_note
+                    )
+                    VALUES (
+                        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+                    )
                 """,
                     row["asset_id"],
                     row["version"],
                     row["display_name"],
                     row["description"],
                     row["price_tokens"],
+                    row["price_credits"],
+                    row["currency_mode"],
                     row["rarity"],
                     row["image_url"],
                     row["is_active"],
@@ -819,7 +899,12 @@ def register_owner_routes(app, require_user, bot_owner_id):
                 await _ensure_asset_media_table(conn)
 
                 current = await conn.fetchrow(
-                    "SELECT * FROM onyx_asset_catalog WHERE asset_id=$1 FOR UPDATE",
+                    """
+                    SELECT *
+                    FROM onyx_asset_catalog
+                    WHERE asset_id=$1
+                    FOR UPDATE
+                    """,
                     asset_id
                 )
 
@@ -846,21 +931,28 @@ def register_owner_routes(app, require_user, bot_owner_id):
                 await conn.execute("""
                     INSERT INTO onyx_asset_media (
                         asset_id, version, content_type, image_data
-                    ) VALUES ($1,$2,$3,$4)
+                    )
+                    VALUES ($1,$2,$3,$4)
                 """, asset_id, new_version, content_type, image_data)
 
                 await conn.execute("""
                     INSERT INTO onyx_asset_versions (
                         asset_id, version, display_name, description,
-                        price_tokens, rarity, image_url, is_active,
-                        is_shop_item, metadata_json, changed_by, change_note
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                        price_tokens, price_credits, currency_mode,
+                        rarity, image_url, is_active, is_shop_item,
+                        metadata_json, changed_by, change_note
+                    )
+                    VALUES (
+                        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+                    )
                 """,
                     row["asset_id"],
                     row["version"],
                     row["display_name"],
                     row["description"],
                     row["price_tokens"],
+                    row["price_credits"],
+                    row["currency_mode"],
                     row["rarity"],
                     row["image_url"],
                     row["is_active"],
@@ -935,7 +1027,8 @@ def register_owner_routes(app, require_user, bot_owner_id):
                 )
 
             rows = await conn.fetch("""
-                SELECT version, display_name, description, price_tokens,
+                SELECT version, display_name, description,
+                       price_tokens, price_credits, currency_mode,
                        rarity, image_url, is_active, is_shop_item,
                        metadata_json, changed_by, change_note, created_at
                 FROM onyx_asset_versions
@@ -950,6 +1043,8 @@ def register_owner_routes(app, require_user, bot_owner_id):
                 "display_name": row["display_name"],
                 "description": row["description"] or "",
                 "price_tokens": int(row["price_tokens"] or 0),
+                "price_credits": int(row["price_credits"] or 0),
+                "currency_mode": row["currency_mode"] or "tokens",
                 "rarity": row["rarity"],
                 "image_url": row["image_url"],
                 "is_active": bool(row["is_active"]),
@@ -977,10 +1072,12 @@ def register_owner_routes(app, require_user, bot_owner_id):
     app.router.add_get("/api/owner/assets", assets_list)
     app.router.add_post("/api/owner/assets", asset_create)
     app.router.add_patch("/api/owner/assets/{asset_id}", asset_update)
+
     app.router.add_post(
         "/api/owner/assets/{asset_id}/upload",
         asset_upload
     )
+
     app.router.add_get(
         "/api/owner/assets/{asset_id}/versions",
         asset_versions
