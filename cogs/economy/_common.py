@@ -11,6 +11,7 @@ from currency_system import (
     get_credit_balance,
     grant_credits,
     spend_credits,
+    update_discord_user_profile,
 )
 
 from cogs.economy.games._streaks import cancel_streak_round
@@ -72,8 +73,6 @@ async def place_wager(bot, user_id, amount, source):
             "error": "Enter a valid positive wager.",
         }
 
-    # The source names used by the game commands are, for example,
-    # blackjack_wager, slots_wager, dice_wager, and betflip_wager.
     game = str(source).removesuffix("_wager").casefold()
 
     if game not in {"blackjack", "slots", "dice", "betflip"}:
@@ -107,8 +106,6 @@ async def place_wager(bot, user_id, amount, source):
                     "error": "The ONYX economy is disabled.",
                 }
 
-            # Preserve the original economy limits as an additional
-            # safety boundary. Website limits may be more restrictive.
             minimum = max(
                 int(settings["min_bet"]),
                 int(validation["config"]["minimum_wager"]),
@@ -143,8 +140,10 @@ async def pay_out(
     amount,
     source,
     reference=None,
+    display_name=None,
+    username=None,
 ):
-    """Pay winnings using an idempotent transaction reference."""
+    """Pay winnings and record the member's latest known Discord identity."""
 
     amount = int(amount)
 
@@ -160,8 +159,6 @@ async def pay_out(
             "error": "Payout exceeds the maximum Credits limit.",
         }
 
-    # Refunds and pushes return money already deducted from the player.
-    # They must not be blocked by the configured winnings limit.
     source_name = str(source).casefold()
     is_return = (
         source_name.endswith("_refund")
@@ -186,6 +183,13 @@ async def pay_out(
     async with bot.db.pool.acquire() as conn:
         async with conn.transaction():
             try:
+                await update_discord_user_profile(
+                    conn,
+                    int(user_id),
+                    display_name=display_name,
+                    username=username,
+                )
+
                 return await grant_credits(
                     conn,
                     user_id,
@@ -271,8 +275,6 @@ class PlayerView(discord.ui.View):
 
         try:
             if self.streak_id:
-                # The streak pot was never deducted from the wallet.
-                # Return the round to active status without paying Credits.
                 await cancel_streak_round(
                     self.bot,
                     self.user_id,
@@ -289,6 +291,16 @@ class PlayerView(discord.ui.View):
                 self.bet,
                 f"{self.game}_refund",
                 f"{self.reference}:refund",
+                display_name=getattr(
+                    self,
+                    "display_name",
+                    None,
+                ),
+                username=getattr(
+                    self,
+                    "username",
+                    None,
+                ),
             )
 
             if result and result.get("ok"):
