@@ -2,10 +2,12 @@
 """Owner-only ONYX arcade control API.
 
 Stores global arcade controls and an auditable history in PostgreSQL.
-Runtime enforcement is performed by the Discord bot integration.
+Runtime enforcement is handled by the Discord bot.
 """
+
 import json
 from aiohttp import web
+
 
 DEFAULT_CONFIG = {
     "enabled": True,
@@ -27,6 +29,8 @@ CONFIG_KEYS = set(DEFAULT_CONFIG) - {"games"}
 
 
 async def ensure_arcade_tables(conn):
+    """Create arcade control and audit tables."""
+
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS onyx_arcade_control (
             id INTEGER PRIMARY KEY CHECK (id=1),
@@ -59,12 +63,18 @@ async def ensure_arcade_tables(conn):
 
 
 def _config(raw):
+    """Normalize stored configuration and supply missing defaults."""
+
     try:
-        value = dict(raw) if isinstance(raw, dict) else json.loads(raw or "{}")
+        if isinstance(raw, dict):
+            value = dict(raw)
+        else:
+            value = json.loads(raw or "{}")
     except (TypeError, ValueError):
         value = {}
 
     result = dict(DEFAULT_CONFIG)
+
     result.update({
         key: item
         for key, item in value.items()
@@ -72,9 +82,11 @@ def _config(raw):
     })
 
     games = value.get("games", {})
+
     result["games"] = {
         game: bool(games.get(game, True))
-        if isinstance(games, dict) else True
+        if isinstance(games, dict)
+        else True
         for game in GAME_KEYS
     }
 
@@ -152,108 +164,113 @@ def register_arcade_routes(app, require_user, bot_owner_id):
             )
 
         async with request.app["db"].acquire() as conn:
-            await ensure_arcade_tables(conn)
+            async with conn.transaction():
 
-            row = await conn.fetchrow("""
-                SELECT config
-                FROM onyx_arcade_control
-                WHERE id=1
-                FOR UPDATE
-            """)
+                await ensure_arcade_tables(conn)
 
-            current = _config(row["config"])
-            updated = dict(current)
+                row = await conn.fetchrow("""
+                    SELECT config
+                    FROM onyx_arcade_control
+                    WHERE id=1
+                    FOR UPDATE
+                """)
 
-            for key in ("enabled", "streaks_enabled"):
-                if key in body:
-                    if not isinstance(body[key], bool):
+                current = _config(row["config"])
+                updated = dict(current)
+
+                for key in ("enabled", "streaks_enabled"):
+                    if key in body:
+                        if not isinstance(body[key], bool):
+                            return web.json_response(
+                                {"error": f"{key} must be true or false."},
+                                status=400
+                            )
+
+                        updated[key] = body[key]
+
+                if "games" in body:
+                    if (
+                        not isinstance(body["games"], dict)
+                        or set(body["games"]) - GAME_KEYS
+                    ):
                         return web.json_response(
-                            {"error": f"{key} must be true or false."},
+                            {"error": "Invalid game settings."},
                             status=400
                         )
 
-                    updated[key] = body[key]
+                    for game, enabled in body["games"].items():
+                        if not isinstance(enabled, bool):
+                            return web.json_response(
+                                {"error": f"{game} must be true or false."},
+                                status=400
+                            )
 
-            if "games" in body:
-                if (
-                    not isinstance(body["games"], dict)
-                    or set(body["games"]) - GAME_KEYS
-                ):
-                    return web.json_response(
-                        {"error": "Invalid game settings."},
-                        status=400
-                    )
+                        updated["games"][game] = enabled
 
-                for game, enabled in body["games"].items():
-                    if not isinstance(enabled, bool):
+                bounds = {
+                    "minimum_wager": (1, 2_000_000_000),
+                    "maximum_wager": (1, 2_000_000_000),
+                    "maximum_payout": (1, 2_000_000_000),
+                    "maximum_streak_wins": (1, 100),
+                }
+
+                for key, (low, high) in bounds.items():
+                    if key not in body:
+                        continue
+
+                    value = body[key]
+
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, int)
+                        or not low <= value <= high
+                    ):
                         return web.json_response(
-                            {"error": f"{game} must be true or false."},
+                            {
+                                "error": (
+                                    f"{key} must be a whole number "
+                                    f"from {low} to {high}."
+                                )
+                            },
                             status=400
                         )
 
-                    updated["games"][game] = enabled
-
-            bounds = {
-                "minimum_wager": (1, 2_000_000_000),
-                "maximum_wager": (1, 2_000_000_000),
-                "maximum_payout": (1, 2_000_000_000),
-                "maximum_streak_wins": (1, 100),
-            }
-
-            for key, (low, high) in bounds.items():
-                if key not in body:
-                    continue
-
-                value = body[key]
+                    updated[key] = value
 
                 if (
-                    isinstance(value, bool)
-                    or not isinstance(value, int)
-                    or not low <= value <= high
+                    updated["minimum_wager"]
+                    > updated["maximum_wager"]
                 ):
                     return web.json_response(
                         {
                             "error": (
-                                f"{key} must be a whole number "
-                                f"from {low} to {high}."
+                                "Minimum wager cannot exceed maximum wager."
                             )
                         },
                         status=400
                     )
 
-                updated[key] = value
+                await conn.execute("""
+                    UPDATE onyx_arcade_control
+                    SET config=$1::jsonb,
+                        updated_by=$2,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=1
+                """, json.dumps(updated), actor)
 
-            if updated["minimum_wager"] > updated["maximum_wager"]:
-                return web.json_response(
-                    {
-                        "error": (
-                            "Minimum wager cannot exceed maximum wager."
-                        )
-                    },
-                    status=400
-                )
+                changed = {
+                    key: updated[key]
+                    for key in body
+                }
 
-            await conn.execute("""
-                UPDATE onyx_arcade_control
-                SET config=$1::jsonb,
-                    updated_by=$2,
-                    updated_at=CURRENT_TIMESTAMP
-                WHERE id=1
-            """, json.dumps(updated), actor)
-
-            changed = {
-                key: updated[key]
-                for key in body
-            }
-
-            await conn.execute("""
-                INSERT INTO onyx_arcade_admin_log (
-                    actor_id,
-                    action,
-                    details
-                )
-                VALUES ($1, 'settings_updated', $2::jsonb)
-            """, actor, json.dumps(changed))
+                await conn.execute("""
+                    INSERT INTO onyx_arcade_admin_log (
+                        actor_id,
+                        action,
+                        details
+                    )
+                    VALUES ($1, 'settings_updated', $2::jsonb)
+                """, actor, json.dumps(changed))
 
         return web.json_response({
             "ok": True,
