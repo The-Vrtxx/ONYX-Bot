@@ -33,6 +33,7 @@ from cogs.economy.games._streaks import (
     create_streak,
     get_streak,
 )
+from cogs.economy.games._controls import ensure_arcade_control_tables
 
 COLOR = discord.Color.from_rgb(25, 190, 190)
 
@@ -142,6 +143,7 @@ class Economy(commands.Cog):
 
         await ensure_economy_tables(self.bot.db.pool)
         await ensure_streak_tables(self.bot.db.pool)
+        await ensure_arcade_control_tables(self.bot.db.pool)
 
     async def available(self, ctx):
         if self.bot.db.backend != "postgres":
