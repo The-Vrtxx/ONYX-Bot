@@ -46,6 +46,7 @@ class SlotsView(PlayerView):
 
         self.spinning = False
         self.result_handler = result_handler
+        self.settlement_started = False
 
     def slot_embed(self, reels, status=""):
         display = "　|　".join(
@@ -63,10 +64,7 @@ class SlotsView(PlayerView):
             ),
         )
 
-        embed.set_footer(
-            text="ONYX Arcade • Slot Machine"
-        )
-
+        embed.set_footer(text="ONYX Arcade • Slot Machine")
         return embed
 
     @staticmethod
@@ -84,12 +82,7 @@ class SlotsView(PlayerView):
 
         return 0
 
-    async def finish_result(
-        self,
-        interaction,
-        reels,
-        multiplier,
-    ):
+    async def finish_result(self, interaction, reels, multiplier):
         """Settle a completed spin exactly once."""
 
         if multiplier:
@@ -102,6 +95,7 @@ class SlotsView(PlayerView):
             )
 
             if self.result_handler:
+                self.settlement_started = True
                 await self.result_handler(
                     interaction,
                     self,
@@ -110,6 +104,8 @@ class SlotsView(PlayerView):
                     result,
                 )
                 return
+
+            self.settlement_started = True
 
             paid = await pay_out(
                 self.bot,
@@ -120,7 +116,9 @@ class SlotsView(PlayerView):
             )
 
             if not paid or not paid.get("ok"):
-                result += "\n\n⚠️ Your payout needs administrator review."
+                result += (
+                    "\n\n⚠️ Your payout needs administrator review."
+                )
 
             color = discord.Color.gold()
 
@@ -131,6 +129,7 @@ class SlotsView(PlayerView):
             )
 
             if self.result_handler:
+                self.settlement_started = True
                 await self.result_handler(
                     interaction,
                     self,
@@ -140,13 +139,10 @@ class SlotsView(PlayerView):
                 )
                 return
 
+            self.settlement_started = True
             color = discord.Color.red()
 
-        final_embed = self.slot_embed(
-            reels,
-            result,
-        )
-
+        final_embed = self.slot_embed(reels, result)
         final_embed.color = color
 
         await interaction.edit_original_response(
@@ -155,7 +151,7 @@ class SlotsView(PlayerView):
         )
 
     async def recover_failed_spin(self):
-        """Release a streak round if the animation cannot finish."""
+        """Refund or release a spin that failed before settlement began."""
 
         if self.streak_id:
             await cancel_streak_round(
@@ -165,7 +161,6 @@ class SlotsView(PlayerView):
             )
             return
 
-        # A normal wager is refunded if the spin cannot be completed.
         await pay_out(
             self.bot,
             self.user_id,
@@ -191,7 +186,6 @@ class SlotsView(PlayerView):
         self.finished = True
         button.disabled = True
 
-        # Determine the result before the animation begins.
         final_reels = [
             random.choice(SLOT_SYMBOLS)
             for _ in range(3)
@@ -208,7 +202,6 @@ class SlotsView(PlayerView):
                 view=self,
             )
 
-            # Animate the reels.
             for _ in range(self.SPIN_FRAMES):
                 animated_reels = [
                     random.choice(SLOT_SYMBOLS)
@@ -225,7 +218,6 @@ class SlotsView(PlayerView):
 
                 await asyncio.sleep(self.FRAME_DELAY)
 
-            # Reveal the predetermined result one reel at a time.
             displayed_reels = [
                 random.choice(SLOT_SYMBOLS)
                 for _ in range(3)
@@ -250,7 +242,6 @@ class SlotsView(PlayerView):
 
                 await asyncio.sleep(self.STOP_DELAY)
 
-            # The result handler now owns settlement.
             await self.finish_result(
                 interaction,
                 final_reels,
@@ -258,11 +249,14 @@ class SlotsView(PlayerView):
             )
 
         except Exception:
-            # Do not silently strand a streak pot or normal wager.
-            try:
-                await self.recover_failed_spin()
-            except Exception:
-                pass
+            # Only refund if the result handler has not started.
+            # Once settlement starts, an automatic refund could duplicate
+            # a payout that was already committed to the database.
+            if not self.settlement_started:
+                try:
+                    await self.recover_failed_spin()
+                except Exception:
+                    pass
 
             raise
 
