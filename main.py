@@ -1,3 +1,4 @@
+
 import os
 import io
 import json
@@ -569,6 +570,7 @@ COG_LABELS = {
     "automod": "AutoMod",
     "channel_manager": "Channel Management",
     "custom": "Custom Commands & Embeds",
+    "economy": "Economy",
     "engagement": "Engagement",
     "lastfm": "Last.fm",
     "levels": "Levels",
@@ -609,7 +611,7 @@ async def export_commands(ctx):
 
         category = COG_LABELS.get(
             module,
-            command.cog.qualified_name if command.cog else "Core"
+            module.replace("_", " ").title()
         )
 
         usage = f"{ctx.prefix}{command.qualified_name}"
@@ -672,6 +674,7 @@ HELP_FOLDER_LABELS = {
     "administration": "Administration",
     "community": "Community",
     "core": "Utilities & Integrations",
+    "economy": "Economy",
     "integrations": "Utilities & Integrations",
     "leveling": "Leveling & Progression",
     "logging": "Logging & Audit",
@@ -686,6 +689,14 @@ HELP_FOLDER_LABELS = {
 HELP_MODULE_OVERRIDES = {
     "automod": "Moderation",
 }
+
+
+def _folder_category_label(folder):
+    """Use a friendly label or automatically format a new cog folder name."""
+    return HELP_FOLDER_LABELS.get(
+        folder,
+        folder.replace("_", " ").replace("-", " ").title()
+    )
 
 
 def _is_owner_restricted(command):
@@ -791,7 +802,7 @@ def get_help_categories(owner_mode=False):
 
             label = HELP_MODULE_OVERRIDES.get(
                 module,
-                HELP_FOLDER_LABELS.get(folder, "Other")
+                _folder_category_label(folder)
             )
 
         else:
