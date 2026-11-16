@@ -1,5 +1,5 @@
 
-"""ONYX owner-only bot credit earnings ledger."""
+"""ONYX owner-only bot credit earnings and arcade ledger."""
 
 from aiohttp import web
 
@@ -10,6 +10,27 @@ BOT_REWARD_SOURCES = {
     "reward_work",
     "reward_beg",
 }
+
+ARCADE_PAYOUT_SOURCES = {
+    "blackjack_payout",
+    "slots_payout",
+    "dice_payout",
+    "betflip_payout",
+    "arcade_streak",
+}
+
+ARCADE_RETURN_SOURCES = {
+    "blackjack_push",
+    "slots_push",
+    "dice_push",
+    "betflip_push",
+}
+
+ALL_LEDGER_SOURCES = (
+    BOT_REWARD_SOURCES
+    | ARCADE_PAYOUT_SOURCES
+    | ARCADE_RETURN_SOURCES
+)
 
 
 def register_credit_ledger_routes(app, require_user, bot_owner_id):
@@ -38,7 +59,7 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
                 WHERE transaction_type = 'earn'
                   AND source = ANY($1::text[])
                   AND amount > 0
-            """, list(BOT_REWARD_SOURCES))
+            """, list(ALL_LEDGER_SOURCES))
 
             by_source = await conn.fetch("""
                 SELECT
@@ -51,12 +72,54 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
                   AND amount > 0
                 GROUP BY source
                 ORDER BY total_earned DESC
+            """, list(ALL_LEDGER_SOURCES))
+
+            rewards = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) AS transaction_count,
+                    COALESCE(SUM(amount), 0) AS total_earned
+                FROM onyx_credit_transactions
+                WHERE transaction_type = 'earn'
+                  AND source = ANY($1::text[])
+                  AND amount > 0
             """, list(BOT_REWARD_SOURCES))
+
+            arcade = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) AS transaction_count,
+                    COALESCE(SUM(amount), 0) AS total_earned
+                FROM onyx_credit_transactions
+                WHERE transaction_type = 'earn'
+                  AND source = ANY($1::text[])
+                  AND amount > 0
+            """, list(ARCADE_PAYOUT_SOURCES))
+
+            returns = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) AS transaction_count,
+                    COALESCE(SUM(amount), 0) AS total_returned
+                FROM onyx_credit_transactions
+                WHERE transaction_type = 'earn'
+                  AND source = ANY($1::text[])
+                  AND amount > 0
+            """, list(ARCADE_RETURN_SOURCES))
 
         return web.json_response({
             "total_earned": int(row["total_earned"]),
             "transaction_count": int(row["transaction_count"]),
             "users_rewarded": int(row["users_rewarded"]),
+            "rewards": {
+                "total_earned": int(rewards["total_earned"]),
+                "transaction_count": int(rewards["transaction_count"])
+            },
+            "arcade": {
+                "total_earned": int(arcade["total_earned"]),
+                "transaction_count": int(arcade["transaction_count"])
+            },
+            "returns": {
+                "total_returned": int(returns["total_returned"]),
+                "transaction_count": int(returns["transaction_count"])
+            },
             "sources": [
                 {
                     "source": item["source"],
@@ -86,7 +149,7 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
             if user_id and not user_id.isdigit():
                 raise ValueError()
 
-            if source and source not in BOT_REWARD_SOURCES:
+            if source and source not in ALL_LEDGER_SOURCES:
                 raise ValueError()
 
             if before is not None and before < 1:
@@ -104,7 +167,7 @@ def register_credit_ledger_routes(app, require_user, bot_owner_id):
             "t.amount > 0"
         ]
 
-        values = [list(BOT_REWARD_SOURCES)]
+        values = [list(ALL_LEDGER_SOURCES)]
 
         def add_condition(condition, value):
             values.append(value)
