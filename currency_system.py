@@ -5,14 +5,11 @@ Prestige Tokens remain in the existing onyx_prestige_wallet.
 ONYX Credits use a separate wallet and transaction ledger.
 """
 
-from datetime import datetime, timezone
-
-
 MAX_CREDITS = 2_000_000_000
 
 
 async def ensure_currency_tables(pool):
-    """Create the ONYX Credits wallet and transaction ledger."""
+    """Create ONYX Credits tables and Discord identity records."""
 
     await pool.execute("""
         CREATE TABLE IF NOT EXISTS onyx_credit_wallet (
@@ -67,6 +64,49 @@ async def ensure_currency_tables(pool):
         )
     """)
 
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS onyx_discord_user_profiles (
+            user_id BIGINT PRIMARY KEY,
+            display_name TEXT,
+            username TEXT,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    await pool.execute("""
+        CREATE INDEX IF NOT EXISTS idx_onyx_discord_profiles_display_name
+        ON onyx_discord_user_profiles(LOWER(display_name))
+    """)
+
+
+async def update_discord_user_profile(
+    conn,
+    user_id,
+    display_name=None,
+    username=None
+):
+    """Store the latest known global Discord display name."""
+
+    await conn.execute("""
+        INSERT INTO onyx_discord_user_profiles (
+            user_id,
+            display_name,
+            username,
+            updated_at
+        )
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id) DO UPDATE SET
+            display_name = COALESCE(
+                EXCLUDED.display_name,
+                onyx_discord_user_profiles.display_name
+            ),
+            username = COALESCE(
+                EXCLUDED.username,
+                onyx_discord_user_profiles.username
+            ),
+            updated_at = CURRENT_TIMESTAMP
+    """, user_id, display_name, username)
+
 
 async def ensure_credit_wallet(conn, user_id):
     """Create a wallet if the member does not already have one."""
@@ -107,8 +147,8 @@ async def grant_credits(
     """Grant Credits safely and record the transaction.
 
     Call this inside an existing database transaction.
-    A reference_id makes the reward idempotent: the same reward
-    cannot be granted twice for the same user and source.
+    A reference_id prevents the same reward from being granted
+    twice for the same user and source.
     """
 
     amount = int(amount)
@@ -117,11 +157,13 @@ async def grant_credits(
         raise ValueError("Credit reward must be a positive valid amount.")
 
     source = str(source).strip().lower()
+
     if not source or len(source) > 48:
         raise ValueError("A valid reward source is required.")
 
     if reference_id is not None:
         reference_id = str(reference_id).strip()
+
         if not reference_id or len(reference_id) > 120:
             raise ValueError("Invalid reward reference.")
 
@@ -144,7 +186,9 @@ async def grant_credits(
         existing = await conn.fetchval("""
             SELECT 1
             FROM onyx_credit_transactions
-            WHERE user_id=$1 AND source=$2 AND reference_id=$3
+            WHERE user_id=$1
+              AND source=$2
+              AND reference_id=$3
         """, user_id, source, reference_id)
 
         if existing:
@@ -164,8 +208,13 @@ async def grant_credits(
 
     await conn.execute("""
         INSERT INTO onyx_credit_transactions (
-            user_id, amount, balance_after,
-            transaction_type, source, reference_id, description
+            user_id,
+            amount,
+            balance_after,
+            transaction_type,
+            source,
+            reference_id,
+            description
         )
         VALUES($1, $2, $3, 'earn', $4, $5, $6)
     """,
@@ -238,8 +287,12 @@ async def spend_credits(
 
     await conn.execute("""
         INSERT INTO onyx_credit_transactions (
-            user_id, amount, balance_after,
-            transaction_type, source, description
+            user_id,
+            amount,
+            balance_after,
+            transaction_type,
+            source,
+            description
         )
         VALUES($1, $2, $3, 'spend', $4, $5)
     """,
