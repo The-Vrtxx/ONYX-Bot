@@ -527,10 +527,11 @@ class Levels(commands.Cog):
             ending = ""
 
         try:
-            await message.channel.send(
+            announcement = await message.channel.send(
                 f"🎉 {message.author.mention} reached **{level_text}**!{ending}",
                 allowed_mentions=discord.AllowedMentions(users=True),
             )
+            await announcement.delete(delay=10)
         except discord.HTTPException:
             pass
 
