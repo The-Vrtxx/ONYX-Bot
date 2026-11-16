@@ -2,10 +2,16 @@ import discord
 from discord.ext import commands
 
 
-# Canonical command path -> shortcuts.
-# main.py translates these shortcuts before discord.py processes the message.
+# Canonical command path -> ONYX shortcuts.
+# main.py translates these shortcuts before discord.py processes messages.
+#
+# Only include commands that exist in the current cog source.
+# Built-in discord.py aliases are intentionally left to their own commands.
+
 COMMAND_ALIASES = {
+    # ─────────────────────────────
     # Core / utility
+    # ─────────────────────────────
     "help": ["h", "cmds"],
     "ping": ["pi"],
     "userinfo": ["ui", "whois"],
@@ -17,13 +23,15 @@ COMMAND_ALIASES = {
     "prefix set": ["prset"],
     "prefix reset": ["prreset"],
 
+    # ─────────────────────────────
     # Moderation
+    # ─────────────────────────────
     "ban": ["b"],
     "kick": ["k"],
     "timeout": ["to"],
-    "untimeout": ["uto", "untime"],
+    "untimeout": ["uto"],
     "warn": ["w"],
-    "warnings": ["ws", "warns"],
+    "warnings": ["ws"],
     "purge": ["p", "clear"],
     "modlogs": ["ml", "history"],
     "case": ["mc"],
@@ -37,13 +45,26 @@ COMMAND_ALIASES = {
     "role_add": ["ra"],
     "role_remove": ["rr"],
 
-    # Jail / protection / security
+    # Additional moderation
+    "mute": ["mt"],
+    "imute": ["imt"],
+    "rmute": ["rmt"],
+    "unmute": ["umt"],
+    "unimute": ["uimt"],
+    "unrmute": ["urmt"],
+    "setupmute": ["smute"],
+    "updatepermissions": ["uperm"],
+
+    # ─────────────────────────────
+    # Jail / security
+    # ─────────────────────────────
     "jail": ["j"],
     "jailtime": ["jt"],
     "unjail": ["uj"],
     "jaillist": ["jl"],
     "jailinfo": ["ji"],
     "jailcancel": ["jc"],
+
     "antinuke": ["an"],
     "antinuke help": ["anh"],
     "antinuke setup": ["ans"],
@@ -53,16 +74,30 @@ COMMAND_ALIASES = {
     "antinuke logchannel": ["anlog"],
     "antinuke jailrole": ["anjr"],
     "antinuke staffrole": ["ansr"],
+    "antinuke staffrole add": ["ansra"],
+    "antinuke staffrole remove": ["ansrr"],
     "antinuke whitelist": ["anw"],
+    "antinuke whitelist add": ["anwa"],
+    "antinuke whitelist remove": ["anwr"],
+    "antinuke whitelist list": ["anwl"],
     "antinuke on": ["anon"],
     "antinuke off": ["anoff"],
     "antinuke logs": ["anlogs"],
+
     "automod": ["am"],
-    "automod_ignore": ["ami"],
+    "automod filter": ["amf"],
+    "antiraid": ["ar"],
+    "antiraid_off": ["aroff"],
+    "honeypot": ["hp"],
+    "honeypot create": ["hpc"],
+    "honeypot status": ["hps"],
+    "honeypot delete": ["hpd"],
     "security_set": ["secset"],
     "security_off": ["secoff"],
 
+    # ─────────────────────────────
     # Channels / server
+    # ─────────────────────────────
     "channel": ["ch"],
     "nuke": ["nk"],
     "channelcount": ["cc"],
@@ -73,44 +108,99 @@ COMMAND_ALIASES = {
     "servericon": ["icon"],
     "membercount": ["mcnt"],
     "firstmessage": ["fm"],
+    "snipe": ["sn"],
+    "editsnipe": ["esn"],
+
     "role_create": ["rc"],
     "role_delete": ["rd"],
     "role": ["r"],
     "rolepanel_create": ["rpc"],
+
     "autorole_set": ["ars"],
     "autorole_remove": ["arr"],
     "autorole_list": ["arl"],
+
     "reactionrole_add": ["rra"],
     "reactionrole_remove": ["rrr"],
     "reactionrole_list": ["rrl"],
+
     "selfrole_add": ["sra"],
     "selfrole_remove": ["srr"],
     "selfrole_list": ["srl"],
+
     "setup": ["ss"],
+    "setup jail": ["sjail"],
     "settings": ["cfg"],
     "serverdata": ["sd"],
+
+    "clearbots": ["cb"],
+    "massrole": ["mr"],
+    "backup": ["bk"],
+    "backup create": ["bkcreate"],
+    "backup restore": ["bkrestore"],
+
+    # Server access / management
+    "access": ["acc"],
+    "allow": ["allowserver"],
+    "revoke": ["revokeserver"],
+    "manager": ["mgr"],
+    "manager add": ["mgra"],
+    "manager remove": ["mgrr"],
+    "managers": ["mgrs"],
+    "audit": ["auditservers"],
+    "enforce": ["enforcewl"],
+
+    # ─────────────────────────────
+    # Administration / owner tools
+    # ─────────────────────────────
+    "developer": ["devteam"],
+    "developer add": ["deva"],
+    "developer remove": ["devr"],
+    "developer list": ["devl"],
+    "developer check": ["devc"],
+    "stresstest": ["stress"],
+
+    "shh": ["sh"],
     "shh_whitelist_add": ["shwa"],
     "shh_whitelist_remove": ["shwr"],
     "shh_set_role": ["shsr"],
 
+    # ─────────────────────────────
     # Logging / welcome / engagement
+    # ─────────────────────────────
     "logging_set": ["logs"],
     "logging_remove": ["logr"],
     "logging_list": ["logl"],
     "logging_test": ["logt"],
     "welcome_set": ["wset"],
     "goodbye_set": ["gset"],
+
     "poll": ["pl"],
     "autoresponse_add": ["ara"],
     "autoresponse_remove": ["arrm"],
     "autoresponse_list": ["arlst"],
 
-    # Levels / fun
+    # ─────────────────────────────
+    # Levels / prestige
+    # ─────────────────────────────
     "rank": ["rnk"],
     "leaderboard": ["lb", "top"],
-    "levels_settings": ["lvls"],
-    "8ball": ["8b", "eightball"],
-    "coinflip": ["cf", "flip"],
+    "prestige": ["prest"],
+    "prestige leaderboard": ["prestlb"],
+
+    # Owner level administration
+    "leveladmin": ["lvla"],
+    "leveladmin xp": ["lvlxp"],
+    "leveladmin xp add": ["lvladd"],
+    "leveladmin xp set": ["lvlset"],
+    "leveladmin xp remove": ["lvlrm"],
+    "leveladmin reset": ["lvlreset"],
+
+    # ─────────────────────────────
+    # Fun
+    # ─────────────────────────────
+    "8ball": ["8b"],
+    "coinflip": ["cf"],
     "roll": ["dice"],
     "choose": ["chz"],
     "rate": ["rt"],
@@ -125,7 +215,7 @@ COMMAND_ALIASES = {
     "roast": ["ro"],
     "meme": ["mm"],
     "fortune": ["fort"],
-    "number": ["num", "rng"],
+    "number": ["num"],
     "riddle": ["rdl"],
     "truth": ["trth"],
     "dare": ["dr"],
@@ -135,19 +225,57 @@ COMMAND_ALIASES = {
     "clap": ["cl"],
     "wyrvote": ["wv"],
     "pick": ["pickone"],
+    "quote": ["qt"],
 
-    # Custom commands / embeds / tickets / voice
+    # ─────────────────────────────
+    # Custom commands / embeds
+    # ─────────────────────────────
     "embed": ["emb"],
+    "embed create": ["embc"],
+    "copyembed": ["embcopy"],
     "custom_add": ["ca"],
     "custom_run": ["cr"],
     "custom_remove": ["crm"],
-    "embed_template_save": ["ets"],
-    "embed_template_send": ["etp"],
-    "embed_template_delete": ["etd"],
+
+    # ─────────────────────────────
+    # Giveaways
+    # ─────────────────────────────
+    "giveaway": ["gw"],
+    "reroll": ["gr"],
+
+    # ─────────────────────────────
+    # Reports / tickets
+    # ─────────────────────────────
+    "setupreport": ["rsetup"],
+    "setupcentralreports": ["rcsetup"],
+    "report": ["rep"],
+
     "ticket_setup": ["tsetup"],
+    "claim": ["tclaim"],
+    "unclaim": ["tunclaim"],
+
+    "ticket": ["t"],
+    "ticket claim": ["tc"],
+    "ticket unclaim": ["tuc"],
+    "ticket add": ["ta"],
+    "ticket remove": ["trm"],
+    "ticket rename": ["tren"],
+    "ticket priority": ["tprio"],
+    "ticket transfer": ["txfer"],
+    "ticket info": ["tinfo"],
+    "ticket list": ["tl"],
+    "ticket close": ["tclose"],
+    "ticket category": ["tcat"],
+    "ticket reopen": ["treopen"],
+
+    # ─────────────────────────────
+    # Voice
+    # ─────────────────────────────
     "voicemaster_setup": ["vms"],
 
+    # ─────────────────────────────
     # Last.fm
+    # ─────────────────────────────
     "lastfm": ["lfm"],
     "lastfm connect": ["lfmc"],
     "lastfm finish": ["lfmf"],
@@ -155,10 +283,10 @@ COMMAND_ALIASES = {
     "lastfm account": ["lfma"],
     "lastfm status": ["lfmst"],
     "lastfm link": ["lfml"],
-    "lastfm nowplaying": ["np", "now"],
-    "lastfm recent": ["rec"],
+    "lastfm nowplaying": ["np"],
+    "lastfm recent": ["lfmr"],
     "lastfm toptracks": ["tt"],
-    "lastfm topartists": ["ta"],
+    "lastfm topartists": ["tart"],
     "lastfm topalbums": ["tal"],
     "lastfm profile": ["lfmp"],
     "lastfm artist": ["lfa"],
@@ -169,7 +297,7 @@ COMMAND_ALIASES = {
 
 
 class CommandAliases(commands.Cog):
-    """Displays the configured shortcuts. main.py handles their translation."""
+    """Displays configured ONYX command shortcuts."""
 
     def __init__(self, bot):
         self.bot = bot
@@ -178,40 +306,60 @@ class CommandAliases(commands.Cog):
         name="aliases",
         aliases=["als"],
         help="Show ONYX command abbreviations.",
-        hidden=True
+        hidden=True,
     )
     async def aliases(self, ctx, *, search: str = None):
         rows = []
+
         for command_path, short_names in COMMAND_ALIASES.items():
-            if self.bot.get_command(command_path) is None:
+            command = self.bot.get_command(command_path)
+
+            # Only show commands that are actually registered.
+            if command is None:
                 continue
-            if search and search.casefold() not in command_path.casefold() and not any(
-                search.casefold() in name.casefold() for name in short_names
-            ):
-                continue
+
+            if search:
+                term = search.casefold()
+                if (
+                    term not in command_path.casefold()
+                    and not any(term in name.casefold() for name in short_names)
+                ):
+                    continue
+
             rows.append(
                 f"`{ctx.prefix}{command_path}` → "
                 + ", ".join(f"`{ctx.prefix}{name}`" for name in short_names)
             )
 
         if not rows:
-            return await ctx.send("No matching command abbreviations were found.")
+            return await ctx.send(
+                "No matching command abbreviations were found."
+            )
 
-        pages = [rows[i:i + 12] for i in range(0, len(rows), 12)]
+        pages = [
+            rows[index:index + 12]
+            for index in range(0, len(rows), 12)
+        ]
+
         current = 0
 
         def make_embed(index):
             embed = discord.Embed(
                 title="ONYX • Command Abbreviations",
                 description="\n".join(pages[index]),
-                color=discord.Color.from_rgb(44, 38, 67)
+                color=discord.Color.from_rgb(44, 38, 67),
             )
             embed.set_footer(
-                text=f"{len(rows)} command entries • Page {index + 1}/{len(pages)} • Use ,aliases <name> to search"
+                text=(
+                    f"{len(rows)} command entries • "
+                    f"Page {index + 1}/{len(pages)} • "
+                    "Use ,aliases <name> to search"
+                )
             )
             return embed
 
         message = await ctx.send(embed=make_embed(current))
+
         if len(pages) <= 1:
             return
 
@@ -231,7 +379,9 @@ class CommandAliases(commands.Cog):
         while True:
             try:
                 reaction, user = await self.bot.wait_for(
-                    "reaction_add", timeout=90, check=check
+                    "reaction_add",
+                    timeout=90,
+                    check=check,
                 )
             except TimeoutError:
                 break
@@ -242,6 +392,7 @@ class CommandAliases(commands.Cog):
                 current = max(0, current - 1)
 
             await message.edit(embed=make_embed(current))
+
             try:
                 await message.remove_reaction(reaction, user)
             except discord.HTTPException:
