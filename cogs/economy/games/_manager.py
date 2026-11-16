@@ -51,6 +51,14 @@ class ArcadeManager:
         result_text,
     ):
         user_id = int(game_view.user_id)
+
+        # Always use the player's current global Discord identity.
+        display_name = (
+            getattr(interaction.user, "global_name", None)
+            or interaction.user.name
+        )
+        username = interaction.user.name
+
         game = str(game_view.game)
         streak_id = getattr(game_view, "streak_id", None)
 
@@ -93,6 +101,8 @@ class ArcadeManager:
                 int(payout),
                 f"{game}_push",
                 game_view.reference,
+                display_name=display_name,
+                username=username,
             )
 
             if not paid.get("ok"):
@@ -211,6 +221,8 @@ class ArcadeManager:
                 int(payout),
                 f"{game}_payout",
                 game_view.reference,
+                display_name=display_name,
+                username=username,
             )
 
             if paid.get("ok"):
