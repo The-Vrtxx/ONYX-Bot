@@ -3,11 +3,19 @@
 
 A streak keeps its winnings in PostgreSQL until the player cashes out.
 The entire current pot is risked on the next game.
+
+Website arcade settings control whether streaks can be created or
+continued, the maximum streak length, and the maximum continued pot.
+Existing pots remain available for cashout when settings change.
 """
 
 import uuid
 
 from currency_system import MAX_CREDITS, grant_credits
+from cogs.economy.games._controls import (
+    get_arcade_config,
+    streaks_are_enabled,
+)
 
 
 async def ensure_streak_tables(pool):
@@ -39,12 +47,7 @@ async def ensure_streak_tables(pool):
 
 
 async def recover_interrupted_streaks(bot):
-    """Restore unfinished streak rounds after a bot restart.
-
-    A completed round changes its status transactionally to active or lost.
-    Therefore, a streak still marked playing at startup has no committed
-    result and can safely return to active without changing its pot.
-    """
+    """Restore unfinished streak rounds after a bot restart."""
 
     async with bot.db.pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -76,6 +79,12 @@ async def get_streak(bot, user_id):
 async def create_streak(bot, user_id, initial_pot, game, reference=None):
     """Create a streak after a player's first game win."""
 
+    if not await streaks_are_enabled(bot):
+        return {
+            "ok": False,
+            "error": "Arcade streaks are currently disabled.",
+        }
+
     user_id = int(user_id)
     initial_pot = int(initial_pot)
 
@@ -83,6 +92,15 @@ async def create_streak(bot, user_id, initial_pot, game, reference=None):
         return {
             "ok": False,
             "error": "That winning amount is outside the Credits limit.",
+        }
+
+    config = await get_arcade_config(bot)
+    maximum_payout = int(config["maximum_payout"])
+
+    if initial_pot > maximum_payout:
+        return {
+            "ok": False,
+            "error": "That win exceeds the current arcade payout limit.",
         }
 
     streak_id = str(reference or uuid.uuid4().hex)
@@ -129,6 +147,16 @@ async def create_streak(bot, user_id, initial_pot, game, reference=None):
 async def begin_streak_round(bot, user_id, game):
     """Lock an active streak while the player plays the next game."""
 
+    if not await streaks_are_enabled(bot):
+        return {
+            "ok": False,
+            "error": "Arcade streaks are currently disabled. You can still cash out your existing pot.",
+        }
+
+    config = await get_arcade_config(bot)
+    maximum_wins = int(config["maximum_streak_wins"])
+    maximum_payout = int(config["maximum_payout"])
+
     async with bot.db.pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow("""
@@ -144,6 +172,29 @@ async def begin_streak_round(bot, user_id, game):
                     "error": "You do not have a streak ready to continue.",
                 }
 
+            current_wins = int(row["streak_wins"])
+            current_pot = int(row["pot"])
+            multiplier = int(row["next_multiplier"])
+
+            if current_wins >= maximum_wins:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"You have reached the maximum of "
+                        f"{maximum_wins} streak wins. Cash out your pot."
+                    ),
+                }
+
+            if current_pot * multiplier > maximum_payout:
+                return {
+                    "ok": False,
+                    "error": (
+                        "The next streak payout would exceed the current "
+                        "arcade payout limit. Your existing pot is safe — "
+                        "cash out to collect it."
+                    ),
+                }
+
             await conn.execute("""
                 UPDATE onyx_arcade_streaks
                 SET status='playing',
@@ -155,9 +206,9 @@ async def begin_streak_round(bot, user_id, game):
             return {
                 "ok": True,
                 "streak_id": row["streak_id"],
-                "wager": int(row["pot"]),
-                "streak_wins": int(row["streak_wins"]),
-                "multiplier": int(row["next_multiplier"]),
+                "wager": current_pot,
+                "streak_wins": current_wins,
+                "multiplier": multiplier,
                 "game": str(game),
             }
 
@@ -166,6 +217,10 @@ async def record_streak_win(bot, user_id, streak_id):
     """Increase the streak pot after a successful continued round."""
 
     user_id = int(user_id)
+    config = await get_arcade_config(bot)
+
+    maximum_wins = int(config["maximum_streak_wins"])
+    maximum_payout = int(config["maximum_payout"])
 
     async with bot.db.pool.acquire() as conn:
         async with conn.transaction():
@@ -188,7 +243,28 @@ async def record_streak_win(bot, user_id, streak_id):
 
             old_pot = int(row["pot"])
             multiplier = int(row["next_multiplier"])
+            current_wins = int(row["streak_wins"])
             new_pot = old_pot * multiplier
+
+            if current_wins >= maximum_wins:
+                return {
+                    "ok": False,
+                    "error": (
+                        "The maximum streak win count has been reached. "
+                        "Your current pot is preserved."
+                    ),
+                    "streak": dict(row),
+                }
+
+            if new_pot > maximum_payout:
+                return {
+                    "ok": False,
+                    "error": (
+                        "The next streak payout exceeds the current "
+                        "arcade payout limit. Your current pot is preserved."
+                    ),
+                    "streak": dict(row),
+                }
 
             if new_pot > MAX_CREDITS:
                 return {
@@ -260,10 +336,7 @@ async def lose_streak(bot, user_id, streak_id):
 
 
 async def cancel_streak_round(bot, user_id, streak_id):
-    """Return an unfinished round to the active state.
-
-    This does not award or remove Credits. The pot remains in escrow.
-    """
+    """Return an unfinished round to the active state."""
 
     async with bot.db.pool.acquire() as conn:
         async with conn.transaction():
@@ -281,7 +354,11 @@ async def cancel_streak_round(bot, user_id, streak_id):
 
 
 async def cash_out_streak(bot, user_id):
-    """Transfer the current streak pot to the player's Credits wallet."""
+    """Transfer the current streak pot to the player's Credits wallet.
+
+    Existing escrowed winnings remain cashable even if the owner later
+    lowers the maximum payout or disables streaks.
+    """
 
     user_id = int(user_id)
 
