@@ -165,8 +165,8 @@ class ArcadeManager:
                         prefix=(
                             f"{result_text}\n\n"
                             "⚠️ Your current streak pot has been preserved. "
-                            "The next payout cannot exceed the Credits limit, "
-                            "so you must cash out."
+                            "The next payout exceeds a configured arcade "
+                            "limit, so you must cash out."
                         ),
                     )
 
@@ -253,7 +253,7 @@ class ArcadeManager:
             launch_game=self.launch_streak_game,
         )
 
-        embed = view.decision_embed()
+        embed = await view.decision_embed()
 
         if prefix:
             embed.description = (
