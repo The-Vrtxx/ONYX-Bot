@@ -183,6 +183,8 @@ class Economy(commands.Cog):
         return True
 
     async def begin_game(self, ctx, amount, source):
+        """Resolve a numeric, half, or all wager and place the bet."""
+
         if not await self.available(ctx):
             return None
 
@@ -201,11 +203,36 @@ class Economy(commands.Cog):
                 )
             return None
 
-        try:
-            amount = int(amount)
-        except (TypeError, ValueError):
-            await ctx.send("Enter a valid wager amount.")
-            return None
+        amount_text = str(amount).strip().casefold()
+
+        if amount_text in {"half", "all"}:
+            async with self.bot.db.pool.acquire() as conn:
+                wallet = await get_credit_balance(
+                    conn,
+                    ctx.author.id,
+                )
+
+            balance = int(wallet["credits"])
+
+            if amount_text == "half":
+                amount = balance // 2
+            else:
+                amount = balance
+
+            if amount < 1:
+                await ctx.send(
+                    "You don't have enough Credits for that wager."
+                )
+                return None
+
+        else:
+            try:
+                amount = int(amount_text)
+            except (TypeError, ValueError):
+                await ctx.send(
+                    "Enter a number, `half`, or `all` for your wager."
+                )
+                return None
 
         result = await place_wager(
             self.bot,
@@ -220,7 +247,7 @@ class Economy(commands.Cog):
             )
             return None
 
-        return uuid.uuid4().hex
+        return uuid.uuid4().hex, amount
 
     # ---------------------------------------------------------
     # WALLET
@@ -552,16 +579,18 @@ class Economy(commands.Cog):
 
     @commands.command(
         name="betflip",
-        help="Bet on heads or tails. Usage: ,betflip <amount>",
+        help="Bet on heads or tails. Usage: ,betflip <amount|half|all>",
     )
-    async def betflip(self, ctx, amount: int):
-        reference = await self.begin_game(
+    async def betflip(self, ctx, amount: str):
+        game_result = await self.begin_game(
             ctx,
             amount,
             "betflip_wager",
         )
-        if not reference:
+        if not game_result:
             return
+
+        reference, amount = game_result
 
         view = QuickGameView(
             self.bot,
@@ -583,16 +612,18 @@ class Economy(commands.Cog):
 
     @commands.command(
         name="dice",
-        help="Bet high or low. Usage: ,dice <amount>",
+        help="Bet high or low. Usage: ,dice <amount|half|all>",
     )
-    async def dice(self, ctx, amount: int):
-        reference = await self.begin_game(
+    async def dice(self, ctx, amount: str):
+        game_result = await self.begin_game(
             ctx,
             amount,
             "dice_wager",
         )
-        if not reference:
+        if not game_result:
             return
+
+        reference, amount = game_result
 
         view = QuickGameView(
             self.bot,
@@ -614,16 +645,18 @@ class Economy(commands.Cog):
 
     @commands.command(
         name="slots",
-        help="Play the ONYX slot machine. Usage: ,slots <amount>",
+        help="Play the ONYX slot machine. Usage: ,slots <amount|half|all>",
     )
-    async def slots(self, ctx, amount: int):
-        reference = await self.begin_game(
+    async def slots(self, ctx, amount: str):
+        game_result = await self.begin_game(
             ctx,
             amount,
             "slots_wager",
         )
-        if not reference:
+        if not game_result:
             return
+
+        reference, amount = game_result
 
         view = SlotsView(
             self.bot,
@@ -644,16 +677,18 @@ class Economy(commands.Cog):
     @commands.command(
         name="blackjack",
         aliases=["bj"],
-        help="Play blackjack. Usage: ,blackjack <amount>",
+        help="Play blackjack. Usage: ,blackjack <amount|half|all>",
     )
-    async def blackjack(self, ctx, amount: int):
-        reference = await self.begin_game(
+    async def blackjack(self, ctx, amount: str):
+        game_result = await self.begin_game(
             ctx,
             amount,
             "blackjack_wager",
         )
-        if not reference:
+        if not game_result:
             return
+
+        reference, amount = game_result
 
         draw = BlackjackView.draw
         player = [draw(), draw()]
