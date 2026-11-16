@@ -11,7 +11,11 @@ Existing pots remain available for cashout when settings change.
 
 import uuid
 
-from currency_system import MAX_CREDITS, grant_credits
+from currency_system import (
+    MAX_CREDITS,
+    grant_credits,
+    update_discord_user_profile,
+)
 from cogs.economy.games._controls import (
     get_arcade_config,
     streaks_are_enabled,
@@ -353,9 +357,15 @@ async def cancel_streak_round(bot, user_id, streak_id):
     return result.endswith("1")
 
 
-async def cash_out_streak(bot, user_id):
+async def cash_out_streak(
+    bot,
+    user_id,
+    display_name=None,
+    username=None,
+):
     """Transfer the current streak pot to the player's Credits wallet.
 
+    Save the latest known global Discord identity in the same transaction.
     Existing escrowed winnings remain cashable even if the owner later
     lowers the maximum payout or disables streaks.
     """
@@ -381,6 +391,13 @@ async def cash_out_streak(bot, user_id):
             reference = f"{row['streak_id']}:cashout"
 
             try:
+                await update_discord_user_profile(
+                    conn,
+                    user_id,
+                    display_name=display_name,
+                    username=username,
+                )
+
                 payout = await grant_credits(
                     conn,
                     user_id,
