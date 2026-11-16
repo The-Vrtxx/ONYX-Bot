@@ -17,7 +17,7 @@ from currency_system import (
     spend_credits,
 )
 
-from card_art import render_blackjack_png
+from ._card_art import render_blackjack_png
 
 
 COLOR = discord.Color.from_rgb(25, 190, 190)
