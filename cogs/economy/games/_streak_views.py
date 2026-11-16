@@ -5,6 +5,7 @@ import discord
 
 from currency_system import MAX_CREDITS
 from cogs.economy._common import make_embed, money
+from cogs.economy.games._controls import get_arcade_config
 from cogs.economy.games._streaks import cash_out_streak
 
 
@@ -28,13 +29,6 @@ class StreakDecisionView(discord.ui.View):
         self.finished = False
         self.processing = False
 
-        pot = int(self.streak["pot"])
-        multiplier = int(self.streak["next_multiplier"])
-
-        # Prevent a continuation that could exceed the Credits cap.
-        if pot * multiplier > MAX_CREDITS:
-            self.continue_streak.disabled = True
-
     async def interaction_check(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
@@ -52,12 +46,40 @@ class StreakDecisionView(discord.ui.View):
 
         return True
 
-    def decision_embed(self):
+    async def refresh_controls(self):
+        """Apply the latest owner-configured limits to this view."""
+
+        config = await get_arcade_config(self.bot)
+
+        pot = int(self.streak["pot"])
+        multiplier = int(self.streak["next_multiplier"])
+        wins = int(self.streak["streak_wins"])
+
+        maximum_wins = int(config["maximum_streak_wins"])
+        maximum_payout = int(config["maximum_payout"])
+
+        can_continue = (
+            bool(config["enabled"])
+            and bool(config["streaks_enabled"])
+            and wins < maximum_wins
+            and pot * multiplier <= maximum_payout
+            and pot * multiplier <= MAX_CREDITS
+        )
+
+        self.continue_streak.disabled = not can_continue
+
+        return {
+            "can_continue": can_continue,
+            "maximum_wins": maximum_wins,
+            "maximum_payout": maximum_payout,
+        }
+
+    async def decision_embed(self):
         pot = int(self.streak["pot"])
         wins = int(self.streak["streak_wins"])
         multiplier = int(self.streak["next_multiplier"])
 
-        can_continue = pot * multiplier <= MAX_CREDITS
+        limits = await self.refresh_controls()
 
         description = (
             f"**Current Streak:** {wins} win(s)\n"
@@ -68,11 +90,24 @@ class StreakDecisionView(discord.ui.View):
             "on another game."
         )
 
-        if not can_continue:
+        if not limits["can_continue"]:
+            if not self.bot:
+                reason = "Streak continuation is unavailable."
+            elif wins >= limits["maximum_wins"]:
+                reason = (
+                    f"You reached the maximum of "
+                    f"{limits['maximum_wins']} streak wins."
+                )
+            elif not limits["can_continue"]:
+                reason = (
+                    "Streak continuation is disabled or the next "
+                    "payout exceeds the current limit."
+                )
+            else:
+                reason = "Streak continuation is unavailable."
+
             description += (
-                "\n\n⚠️ **Maximum payout reached.** "
-                "The next possible win would exceed the "
-                "Credits limit. Cash out to collect your pot."
+                f"\n\n⚠️ **Cashout required.** {reason}"
             )
 
         return make_embed(
@@ -139,16 +174,14 @@ class StreakDecisionView(discord.ui.View):
         if self.processing or self.finished:
             return
 
-        pot = int(self.streak["pot"])
-        multiplier = int(self.streak["next_multiplier"])
+        limits = await self.refresh_controls()
 
-        if pot * multiplier > MAX_CREDITS:
+        if not limits["can_continue"]:
             button.disabled = True
 
-            return await interaction.response.send_message(
-                "The next streak payout would exceed the "
-                "maximum Credits limit. Please cash out.",
-                ephemeral=True,
+            return await interaction.response.edit_message(
+                embed=await self.decision_embed(),
+                view=self,
             )
 
         self.processing = True
@@ -164,8 +197,9 @@ class StreakDecisionView(discord.ui.View):
             embed=make_embed(
                 "🔥 CONTINUE YOUR STREAK",
                 (
-                    f"**Pot at Risk:** {money(pot)}\n"
-                    f"**Next Win:** {multiplier}x the pot\n\n"
+                    f"**Pot at Risk:** {money(self.streak['pot'])}\n"
+                    f"**Next Win:** "
+                    f"{self.streak['next_multiplier']}x the pot\n\n"
                     "Choose which game you want to play."
                 ),
             ),
@@ -176,7 +210,7 @@ class StreakDecisionView(discord.ui.View):
 
 
 class StreakGameSelectView(discord.ui.View):
-    """Choose which arcade game to use for the next streak round."""
+    """Choose which enabled arcade game to use for the next streak round."""
 
     def __init__(
         self,
@@ -212,9 +246,30 @@ class StreakGameSelectView(discord.ui.View):
 
         return True
 
+    async def refresh_game_buttons(self):
+        config = await get_arcade_config(self.bot)
+
+        for game in ("blackjack", "slots", "dice", "betflip"):
+            button = getattr(self, game)
+            button.disabled = (
+                not config["enabled"]
+                or not config["streaks_enabled"]
+                or not config["games"].get(game, False)
+            )
+
     async def choose(self, interaction, game):
         if self.finished or self.processing:
             return
+
+        await self.refresh_game_buttons()
+
+        button = getattr(self, game)
+
+        if button.disabled:
+            return await interaction.response.send_message(
+                f"ONYX {game.title()} is currently unavailable.",
+                ephemeral=True,
+            )
 
         self.processing = True
 
