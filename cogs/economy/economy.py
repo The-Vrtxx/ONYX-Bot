@@ -30,7 +30,6 @@ from cogs.economy.games._manager import ArcadeManager
 from cogs.economy.games._streak_views import StreakDecisionView
 from cogs.economy.games._streaks import (
     ensure_streak_tables,
-    recover_interrupted_streaks,
     create_streak,
     get_streak,
 )
@@ -143,14 +142,6 @@ class Economy(commands.Cog):
 
         await ensure_economy_tables(self.bot.db.pool)
         await ensure_streak_tables(self.bot.db.pool)
-
-        recovered = await recover_interrupted_streaks(self.bot)
-
-        if recovered:
-            print(
-                f"[ONYX Economy] Recovered {len(recovered)} "
-                "interrupted arcade streak(s)."
-            )
 
     async def available(self, ctx):
         if self.bot.db.backend != "postgres":
