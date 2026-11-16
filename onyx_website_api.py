@@ -23,6 +23,8 @@ from server_owner_api import register_server_owner_routes, ensure_server_owner_t
 from server_management_api import register_management_routes, ensure_management_tables
 from profile_card_api import register_profile_card_route
 
+from currency_system import ensure_currency_tables, get_credit_balance
+
 
 # Legacy seed catalog. Existing owner-dashboard records are never overwritten.
 SHOP = {
@@ -54,6 +56,7 @@ SHOP = {
         "cosmic_aura": ("Cosmic Aura", 25, "A cosmic purple effect."),
     },
 }
+
 
 # Category -> (database column, default value)
 SLOTS = {
@@ -251,9 +254,7 @@ async def ensure_tables(pool):
         ADD COLUMN IF NOT EXISTS badge_id TEXT NOT NULL DEFAULT 'default'
     """)
 
-    # Frames and borders share one equipment slot. This column records
-    # which Asset Library category the selected frame_id belongs to.
-    # Existing frame_id values remain frames by default.
+    # Frames and borders share one equipment slot.
     await pool.execute("""
         ALTER TABLE onyx_profile_equipped
         ADD COLUMN IF NOT EXISTS frame_category TEXT NOT NULL DEFAULT 'frame'
@@ -298,6 +299,18 @@ async def ensure_tables(pool):
         )
     """)
 
+    # Dual-currency pricing columns.
+    # Existing catalog items remain Token-priced by default.
+    await pool.execute("""
+        ALTER TABLE onyx_asset_catalog
+        ADD COLUMN IF NOT EXISTS price_credits INTEGER NOT NULL DEFAULT 0
+    """)
+
+    await pool.execute("""
+        ALTER TABLE onyx_asset_catalog
+        ADD COLUMN IF NOT EXISTS currency_mode TEXT NOT NULL DEFAULT 'tokens'
+    """)
+
     await pool.execute("""
         CREATE INDEX IF NOT EXISTS idx_onyx_asset_catalog_category_active
         ON onyx_asset_catalog(category, is_active, sort_order)
@@ -321,6 +334,17 @@ async def ensure_tables(pool):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (asset_id, version)
         )
+    """)
+
+    # Preserve pricing history for future dual-currency edits.
+    await pool.execute("""
+        ALTER TABLE onyx_asset_versions
+        ADD COLUMN IF NOT EXISTS price_credits INTEGER NOT NULL DEFAULT 0
+    """)
+
+    await pool.execute("""
+        ALTER TABLE onyx_asset_versions
+        ADD COLUMN IF NOT EXISTS currency_mode TEXT NOT NULL DEFAULT 'tokens'
     """)
 
     await pool.execute("""
@@ -371,6 +395,8 @@ async def get_profile_data(pool, user_id):
                 user_id
             )
 
+            credit_wallet = await get_credit_balance(conn, user_id)
+
             owned_rows = await conn.fetch("""
                 SELECT o.category, o.item_id,
                        COALESCE(a.display_name, o.item_id) AS display_name
@@ -400,6 +426,7 @@ async def get_profile_data(pool, user_id):
     return {
         "user_id": str(user_id),
         "tokens": int(wallet["tokens"]) if wallet else 0,
+        "credits": credit_wallet["credits"],
         "owned": owned,
         "equipped": dict(equipped) if equipped else {}
     }
@@ -588,11 +615,14 @@ async def me(request):
             user_id
         )
 
+        credit_wallet = await get_credit_balance(conn, user_id)
+
     return web.json_response({
         "id": str(user_id),
         "username": session.get("username", "Discord User"),
         "avatar": session.get("avatar"),
-        "tokens": int(wallet["tokens"]) if wallet else 0
+        "tokens": int(wallet["tokens"]) if wallet else 0,
+        "credits": credit_wallet["credits"]
     })
 
 
@@ -706,8 +736,8 @@ async def shop_catalog(request):
     async with request.app["db"].acquire() as conn:
         rows = await conn.fetch("""
             SELECT category, item_id, display_name,
-                   price_tokens, description, rarity,
-                   image_url, metadata_json
+                   price_tokens, price_credits, currency_mode,
+                   description, rarity, image_url, metadata_json
             FROM onyx_asset_catalog
             WHERE is_active=1 AND is_shop_item=1
             ORDER BY category, sort_order, display_name
@@ -722,8 +752,6 @@ async def shop_catalog(request):
         if category not in SHOP_CATEGORIES:
             continue
 
-        # Metadata is stored as JSON text in PostgreSQL.
-        # Parse it safely so the website receives an object.
         metadata = row["metadata_json"] or "{}"
 
         if isinstance(metadata, str):
@@ -748,12 +776,24 @@ async def shop_catalog(request):
                 column and equipped.get(column) == item_id
             )
 
+        token_cost = int(row["price_tokens"])
+        credit_cost = int(row["price_credits"])
+        currency_mode = str(row["currency_mode"] or "tokens")
+
         catalog.append({
             "category": category,
             "section": "frame" if category in {"frame", "border"} else category,
             "id": item_id,
             "name": row["display_name"],
-            "cost": int(row["price_tokens"]),
+
+            # Legacy compatibility for the current shop frontend.
+            "cost": token_cost,
+
+            # New dual-currency pricing fields.
+            "price_tokens": token_cost,
+            "price_credits": credit_cost,
+            "currency_mode": currency_mode,
+
             "description": row["description"],
             "rarity": row["rarity"],
             "image_url": row["image_url"],
@@ -765,6 +805,7 @@ async def shop_catalog(request):
 
     return web.json_response({
         "tokens": data["tokens"],
+        "credits": data["credits"],
         "items": catalog,
         "owned": data["owned"],
         "equipped": data["equipped"]
@@ -772,6 +813,8 @@ async def shop_catalog(request):
 
 
 # PURCHASE ITEM
+# Purchases remain Token-only in this stage.
+# Dual-currency purchasing will be enabled in the next API update.
 async def buy_item(request):
     user_id = require_user(request)
 
@@ -927,9 +970,6 @@ async def equip_item(request):
                         403
                     )
 
-            # Column names come only from the fixed SLOTS allowlist.
-            # Frames and borders share frame_id, with frame_category
-            # preserving the exact Asset Library category.
             if category in {"frame", "border"}:
                 selected_category = (
                     "frame" if item_id == default_value else category
@@ -976,6 +1016,7 @@ async def on_startup(app):
     )
 
     await ensure_tables(app["db"])
+    await ensure_currency_tables(app["db"])
     await ensure_server_owner_tables(app["db"])
     await ensure_management_tables(app["db"])
 
@@ -1013,7 +1054,6 @@ def create_app():
     app.router.add_post("/api/equip", equip_item)
     app.router.add_get("/api/inventory", inventory)
 
-    # Signed-in member's progression and equipped cosmetics for card previews.
     register_profile_card_route(app, require_user)
 
     register_command_routes(app)
