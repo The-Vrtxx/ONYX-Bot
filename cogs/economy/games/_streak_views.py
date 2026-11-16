@@ -3,6 +3,7 @@
 
 import discord
 
+from currency_system import MAX_CREDITS
 from cogs.economy._common import make_embed, money
 from cogs.economy.games._streaks import cash_out_streak
 
@@ -22,10 +23,17 @@ class StreakDecisionView(discord.ui.View):
 
         self.bot = bot
         self.user_id = int(user_id)
-        self.streak = streak
+        self.streak = dict(streak)
         self.launch_game = launch_game
         self.finished = False
         self.processing = False
+
+        pot = int(self.streak["pot"])
+        multiplier = int(self.streak["next_multiplier"])
+
+        # Prevent a continuation that could exceed the Credits cap.
+        if pot * multiplier > MAX_CREDITS:
+            self.continue_streak.disabled = True
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.user_id:
@@ -49,16 +57,27 @@ class StreakDecisionView(discord.ui.View):
         wins = int(self.streak["streak_wins"])
         multiplier = int(self.streak["next_multiplier"])
 
+        can_continue = pot * multiplier <= MAX_CREDITS
+
+        description = (
+            f"**Current Streak:** {wins} win(s)\n"
+            f"**Streak Pot:** {money(pot)}\n"
+            f"**Next Win Multiplier:** {multiplier}x\n\n"
+            "Your winnings are waiting.\n"
+            "Cash out to keep them, or risk the entire pot "
+            "on another game."
+        )
+
+        if not can_continue:
+            description += (
+                "\n\n⚠️ **Maximum payout reached.** "
+                "The next possible win would exceed the "
+                "Credits limit. Cash out to collect your pot."
+            )
+
         return make_embed(
             "🔥 ONYX STREAK",
-            (
-                f"**Current Streak:** {wins} win(s)\n"
-                f"**Streak Pot:** {money(pot)}\n"
-                f"**Next Win Multiplier:** {multiplier}x\n\n"
-                "Your winnings are waiting.\n"
-                "Cash out to keep them, or risk the entire pot "
-                "on another game."
-            ),
+            description,
         )
 
     @discord.ui.button(
@@ -67,38 +86,49 @@ class StreakDecisionView(discord.ui.View):
         style=discord.ButtonStyle.success,
     )
     async def cash_out(self, interaction, button):
+        if self.processing or self.finished:
+            return
+
         self.processing = True
 
-        result = await cash_out_streak(
-            self.bot,
-            self.user_id,
-        )
-
-        if not result.get("ok"):
-            self.processing = False
-
-            return await interaction.response.send_message(
-                result.get("error", "Unable to cash out this streak."),
-                ephemeral=True,
+        try:
+            result = await cash_out_streak(
+                self.bot,
+                self.user_id,
             )
 
-        self.finished = True
+            if not result.get("ok"):
+                self.processing = False
 
-        for child in self.children:
-            child.disabled = True
+                return await interaction.response.send_message(
+                    result.get(
+                        "error",
+                        "Unable to cash out this streak.",
+                    ),
+                    ephemeral=True,
+                )
 
-        await interaction.response.edit_message(
-            embed=make_embed(
-                "💰 STREAK CASHED OUT",
-                (
-                    f"🎉 You secured **{money(result['amount'])}**!\n\n"
-                    f"**Streak Wins:** {result['streak_wins']}\n"
-                    f"**New Balance:** {money(result['credits'])}\n\n"
-                    "Your ONYX streak is complete."
+            self.finished = True
+
+            for child in self.children:
+                child.disabled = True
+
+            await interaction.response.edit_message(
+                embed=make_embed(
+                    "💰 STREAK CASHED OUT",
+                    (
+                        f"🎉 You secured **{money(result['amount'])}**!\n\n"
+                        f"**Streak Wins:** {result['streak_wins']}\n"
+                        f"**New Balance:** {money(result['credits'])}\n\n"
+                        "Your ONYX streak is complete."
+                    ),
                 ),
-            ),
-            view=self,
-        )
+                view=self,
+            )
+
+        except Exception:
+            self.processing = False
+            raise
 
     @discord.ui.button(
         label="Continue Streak",
@@ -106,6 +136,21 @@ class StreakDecisionView(discord.ui.View):
         style=discord.ButtonStyle.primary,
     )
     async def continue_streak(self, interaction, button):
+        if self.processing or self.finished:
+            return
+
+        pot = int(self.streak["pot"])
+        multiplier = int(self.streak["next_multiplier"])
+
+        if pot * multiplier > MAX_CREDITS:
+            button.disabled = True
+
+            return await interaction.response.send_message(
+                "The next streak payout would exceed the "
+                "maximum Credits limit. Please cash out.",
+                ephemeral=True,
+            )
+
         self.processing = True
 
         view = StreakGameSelectView(
@@ -119,9 +164,8 @@ class StreakDecisionView(discord.ui.View):
             embed=make_embed(
                 "🔥 CONTINUE YOUR STREAK",
                 (
-                    f"**Pot at Risk:** {money(self.streak['pot'])}\n"
-                    f"**Next Win:** "
-                    f"{self.streak['next_multiplier']}x the pot\n\n"
+                    f"**Pot at Risk:** {money(pot)}\n"
+                    f"**Next Win:** {multiplier}x the pot\n\n"
                     "Choose which game you want to play."
                 ),
             ),
@@ -146,7 +190,7 @@ class StreakGameSelectView(discord.ui.View):
 
         self.bot = bot
         self.user_id = int(user_id)
-        self.streak = streak
+        self.streak = dict(streak)
         self.launch_game = launch_game
         self.finished = False
         self.processing = False
@@ -169,6 +213,9 @@ class StreakGameSelectView(discord.ui.View):
         return True
 
     async def choose(self, interaction, game):
+        if self.finished or self.processing:
+            return
+
         self.processing = True
 
         try:
@@ -183,7 +230,8 @@ class StreakGameSelectView(discord.ui.View):
 
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "I couldn't start that game. Your streak is still safe.",
+                    "I couldn't start that game. "
+                    "Your streak should remain available.",
                     ephemeral=True,
                 )
 
