@@ -1,3 +1,4 @@
+
 """
 ONYX Website API
 Separate Render web service sharing the bot's PostgreSQL database.
@@ -75,7 +76,6 @@ SLOTS = {
     "badge": ("badge_id", "default"),
 }
 
-# Seasonal event items are collectible-only.
 COLLECTIBLE_CATEGORIES = {"event"}
 SHOP_CATEGORIES = set(SLOTS) | COLLECTIBLE_CATEGORIES
 
@@ -263,7 +263,6 @@ async def ensure_tables(pool):
         )
     """)
 
-    # Safe additions for existing users.
     await pool.execute("""
         ALTER TABLE onyx_profile_equipped
         ADD COLUMN IF NOT EXISTS background_id TEXT NOT NULL DEFAULT 'default'
@@ -318,8 +317,6 @@ async def ensure_tables(pool):
         )
     """)
 
-    # Dual-currency pricing columns.
-    # Existing catalog items remain Token-priced by default.
     await pool.execute("""
         ALTER TABLE onyx_asset_catalog
         ADD COLUMN IF NOT EXISTS price_credits INTEGER NOT NULL DEFAULT 0
@@ -355,7 +352,6 @@ async def ensure_tables(pool):
         )
     """)
 
-    # Preserve pricing history.
     await pool.execute("""
         ALTER TABLE onyx_asset_versions
         ADD COLUMN IF NOT EXISTS price_credits INTEGER NOT NULL DEFAULT 0
@@ -371,7 +367,7 @@ async def ensure_tables(pool):
         ON onyx_asset_versions(asset_id, version DESC)
     """)
 
-    # Seed only missing rows.
+    # Seed only missing rows. Existing catalog records are authoritative.
     for category, items in SHOP.items():
         for sort_order, (item_id, item_data) in enumerate(items.items()):
             name, cost, description = item_data
@@ -799,7 +795,7 @@ async def get_manageable_guilds(request):
     })
 
 
-# SHOP CATALOG - DATABASE IS THE SOURCE OF TRUTH
+# SHOP CATALOG
 async def shop_catalog(request):
     user_id = require_user(request)
 
@@ -882,15 +878,10 @@ async def shop_catalog(request):
             ),
             "id": item_id,
             "name": row["display_name"],
-
-            # Legacy compatibility.
             "cost": token_cost,
-
-            # Dual-currency pricing.
             "price_tokens": token_cost,
             "price_credits": credit_cost,
             "currency_mode": currency_mode,
-
             "description": row["description"],
             "rarity": row["rarity"],
             "image_url": row["image_url"],
@@ -1051,8 +1042,11 @@ async def buy_item(request):
                             conn,
                             user_id,
                             credit_cost,
-                            reason=f"Shop purchase: {name}",
-                            reference=f"{category}:{item_id}"
+                            source="shop_purchase",
+                            description=(
+                                f"Shop purchase: {name} "
+                                f"({category}:{item_id})"
+                            )
                         )
 
                         if not result.get("ok"):
@@ -1061,7 +1055,7 @@ async def buy_item(request):
                             )
 
                         remaining_credits = int(
-                            result.get("credits", 0)
+                            result["credits"]
                         )
 
                 # Record ownership.
@@ -1114,7 +1108,6 @@ async def equip_item(request):
     if not isinstance(category, str) or category not in SLOTS:
         return json_error("Choose a valid cosmetic slot.")
 
-    # An empty title selection means clear the equipped title.
     if category == "title" and item_id == "":
         item_id = None
     elif not isinstance(item_id, str):
