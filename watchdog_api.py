@@ -3,7 +3,7 @@
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import timezone
 
 from aiohttp import web
 
@@ -38,6 +38,8 @@ def _parse_int(value, default, minimum, maximum):
 
 
 def _event_dict(row):
+    """Convert a database event into an API-safe dictionary."""
+
     try:
         details = json.loads(row["details_json"] or "{}")
     except (TypeError, ValueError):
@@ -51,19 +53,45 @@ def _event_dict(row):
     if created_at and created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
 
+    user_id = (
+        str(row["user_id"])
+        if row["user_id"] is not None else None
+    )
+
+    guild_id = (
+        str(row["guild_id"])
+        if row["guild_id"] is not None else None
+    )
+
     return {
         "id": str(row["id"]),
         "category": row["category"],
         "action": row["action"],
         "outcome": row["outcome"],
-        "user_id": (
-            str(row["user_id"])
-            if row["user_id"] is not None else None
+
+        # Permanent Discord identifiers.
+        "user_id": user_id,
+        "guild_id": guild_id,
+
+        # Human-readable snapshots.
+        "username": details.get("username"),
+        "display_name": details.get("display_name"),
+        "guild_name": (
+            details.get("guild_name")
+            or details.get("server_name")
         ),
-        "guild_id": (
-            str(row["guild_id"])
-            if row["guild_id"] is not None else None
+
+        # Moderation target information.
+        "target_id": (
+            str(details["target_id"])
+            if details.get("target_id") is not None
+            else None
         ),
+        "target_username": details.get("target_username"),
+        "target_display_name": details.get(
+            "target_display_name"
+        ),
+
         "details": details,
         "created_at": (
             created_at.isoformat() if created_at else None
@@ -97,16 +125,24 @@ def register_watchdog_routes(app, require_user, bot_owner_id):
         )
 
         before_id = request.query.get("before_id")
+
         if before_id is not None:
             if not re.fullmatch(r"[0-9]{1,20}", before_id):
                 return web.json_response(
                     {"error": "Invalid before_id cursor."},
                     status=400,
                 )
+
             before_id = int(before_id)
 
-        category = request.query.get("category", "").strip().lower()
-        outcome = request.query.get("outcome", "").strip().lower()
+        category = request.query.get(
+            "category", ""
+        ).strip().lower()
+
+        outcome = request.query.get(
+            "outcome", ""
+        ).strip().lower()
+
         search = request.query.get("q", "").strip()[:100]
 
         if category and category not in ALLOWED_CATEGORIES:
@@ -151,10 +187,14 @@ def register_watchdog_routes(app, require_user, bot_owner_id):
                 f"action ILIKE {search_param}",
                 f"category ILIKE {search_param}",
                 f"outcome ILIKE {search_param}",
+
+                # Search saved usernames and server names.
+                f"details_json ILIKE {search_param}",
             ]
 
             if search.isdigit() and len(search) <= 20:
                 id_param = add_param(int(search))
+
                 search_parts.extend([
                     f"user_id = {id_param}",
                     f"guild_id = {id_param}",
@@ -175,8 +215,15 @@ def register_watchdog_routes(app, require_user, bot_owner_id):
             try:
                 rows = await conn.fetch(
                     f"""
-                    SELECT id, category, action, outcome,
-                           user_id, guild_id, details_json, created_at
+                    SELECT
+                        id,
+                        category,
+                        action,
+                        outcome,
+                        user_id,
+                        guild_id,
+                        details_json,
+                        created_at
                     FROM onyx_watchdog_events
                     {where_sql}
                     ORDER BY id DESC
@@ -287,10 +334,12 @@ def register_watchdog_routes(app, require_user, bot_owner_id):
             "events_24h": int(totals["events_24h"] or 0),
             "errors_24h": int(totals["errors_24h"] or 0),
             "warnings_24h": int(totals["warnings_24h"] or 0),
+
             "categories_24h": {
                 row["category"]: int(row["event_count"])
                 for row in categories
             },
+
             "latest_event": latest_event,
         })
 
