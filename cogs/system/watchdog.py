@@ -37,7 +37,65 @@ class WatchdogCog(commands.Cog):
             return
 
         try:
+            details = kwargs.get("details")
+
+            if not isinstance(details, dict):
+                details = {}
+            else:
+                details = dict(details)
+
+            user_id = kwargs.get("user_id")
+            guild_id = kwargs.get("guild_id")
+
+            guild = (
+                self.bot.get_guild(int(guild_id))
+                if guild_id else None
+            )
+
+            # Save the actor's username and display name.
+            if user_id and not details.get("username"):
+                member = (
+                    guild.get_member(int(user_id))
+                    if guild else None
+                )
+
+                user = member or self.bot.get_user(int(user_id))
+
+                if user:
+                    details["username"] = str(user)[:100]
+                    details["display_name"] = getattr(
+                        user,
+                        "display_name",
+                        str(user)
+                    )[:100]
+
+            # Save the server name.
+            if guild_id and not details.get("guild_name") and guild:
+                details["guild_name"] = guild.name[:100]
+
+            # Save the target's username for moderation events.
+            target_id = details.get("target_id")
+
+            if target_id and not details.get("target_username"):
+                target = (
+                    guild.get_member(int(target_id))
+                    if guild else None
+                )
+
+                target = target or self.bot.get_user(int(target_id))
+
+                if target:
+                    details["target_username"] = str(target)[:100]
+                    details["target_display_name"] = getattr(
+                        target,
+                        "display_name",
+                        str(target)
+                    )[:100]
+
+            kwargs["details"] = details
+
             await self.watchdog.log_event(**kwargs)
+
         except Exception:
             log.exception("Watchdog event listener failed.")
 
@@ -49,6 +107,7 @@ class WatchdogCog(commands.Cog):
             return "command"
 
         module = ""
+
         if command.cog:
             module = command.cog.__class__.__module__.casefold()
 
@@ -96,6 +155,7 @@ class WatchdogCog(commands.Cog):
 
         if category == "moderation":
             target_id = self.get_target_id(ctx)
+
             if target_id:
                 details["target_id"] = target_id
 
@@ -148,6 +208,7 @@ class WatchdogCog(commands.Cog):
             guild_id=member.guild.id,
             details={
                 "username": str(member)[:100],
+                "display_name": member.display_name[:100],
                 "account_created": member.created_at.isoformat(),
             },
         )
@@ -162,6 +223,7 @@ class WatchdogCog(commands.Cog):
             guild_id=member.guild.id,
             details={
                 "username": str(member)[:100],
+                "display_name": member.display_name[:100],
             },
         )
 
@@ -171,6 +233,8 @@ class WatchdogCog(commands.Cog):
 
         if before.nick != after.nick:
             changes["nickname_changed"] = True
+            changes["old_display_name"] = before.display_name[:100]
+            changes["new_display_name"] = after.display_name[:100]
 
         before_roles = {role.id for role in before.roles}
         after_roles = {role.id for role in after.roles}
@@ -204,7 +268,12 @@ class WatchdogCog(commands.Cog):
             outcome="success",
             user_id=user.id,
             guild_id=guild.id,
-            details={"username": str(user)[:100]},
+            details={
+                "username": str(user)[:100],
+                "display_name": getattr(
+                    user, "display_name", str(user)
+                )[:100],
+            },
         )
 
     @commands.Cog.listener()
@@ -215,7 +284,12 @@ class WatchdogCog(commands.Cog):
             outcome="success",
             user_id=user.id,
             guild_id=guild.id,
-            details={"username": str(user)[:100]},
+            details={
+                "username": str(user)[:100],
+                "display_name": getattr(
+                    user, "display_name", str(user)
+                )[:100],
+            },
         )
 
     # ---------------------------------------------------------
@@ -446,6 +520,7 @@ class WatchdogCog(commands.Cog):
             details={
                 "member_count": guild.member_count,
                 "owner_id": guild.owner_id,
+                "server_name": guild.name[:100],
             },
         )
 
@@ -456,7 +531,7 @@ class WatchdogCog(commands.Cog):
             action="guild_removed",
             outcome="success",
             guild_id=guild.id,
-            details={"server_name": guild.name},
+            details={"server_name": guild.name[:100]},
         )
 
     @commands.Cog.listener()
