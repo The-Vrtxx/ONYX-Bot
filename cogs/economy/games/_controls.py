@@ -16,6 +16,7 @@ DEFAULT_CONFIG = {
         "dice": True,
         "betflip": True,
         "mines": True,
+        "roulette": True,
     },
     "streaks_enabled": True,
     "minimum_wager": 1,
