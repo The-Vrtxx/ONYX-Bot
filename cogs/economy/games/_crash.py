@@ -15,6 +15,7 @@ from cogs.economy.games._controls import get_arcade_config
 GROWTH_RATE = 0.12
 UPDATE_INTERVAL = 0.9
 MAX_CRASH_MULTIPLIER = 50.0
+MIN_CRASH_MULTIPLIER = 1.50
 
 
 class _MessageResponse:
@@ -67,7 +68,10 @@ class CrashView(PlayerView):
 
         self.crash_multiplier = min(
             MAX_CRASH_MULTIPLIER,
-            max(1.00, math.floor(crash_point * 100) / 100),
+            max(
+                MIN_CRASH_MULTIPLIER,
+                math.floor(crash_point * 100) / 100,
+            ),
         )
 
         self.started_at = None
@@ -311,3 +315,5 @@ class CrashView(PlayerView):
             self.animation_task.cancel()
 
         await super().on_timeout()
+
+
