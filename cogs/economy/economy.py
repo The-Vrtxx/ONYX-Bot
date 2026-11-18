@@ -1,3 +1,4 @@
+
 """ONYX global Credits economy and arcade games."""
 
 import random
@@ -28,6 +29,7 @@ from cogs.economy.games._quick_games import QuickGameView
 from cogs.economy.games._slots import SlotsView
 from cogs.economy.games._mines import MinesView
 from cogs.economy.games._roulette import RouletteView
+from cogs.economy.games._crash import CrashView
 from cogs.economy.games._manager import ArcadeManager
 from cogs.economy.games._streak_views import StreakDecisionView
 from cogs.economy.games._streaks import (
@@ -209,7 +211,6 @@ class Economy(commands.Cog):
                 payout=payout,
             )
         except Exception:
-            # Stats must never interfere with a settled wallet transaction.
             return False
 
         return True
@@ -774,6 +775,40 @@ class Economy(commands.Cog):
         )
 
     @commands.command(
+        name="crash",
+        aliases=["cr"],
+        help="Play ONYX Crash. Usage: ,crash <amount|half|all>",
+    )
+    async def crash(self, ctx, amount: str):
+        game_result = await self.begin_game(
+            ctx,
+            amount,
+            "crash_wager",
+        )
+        if not game_result:
+            return
+
+        reference, amount = game_result
+
+        view = CrashView(
+            self.bot,
+            ctx.author,
+            amount,
+            reference,
+            result_handler=self.arcade.result_handler,
+        )
+
+        message = await ctx.send(
+            embed=view.current_embed(
+                "🚀 The multiplier is about to climb. "
+                "Cash out before it crashes!"
+            ),
+            view=view,
+        )
+
+        view.start(message)
+
+    @commands.command(
         name="blackjack",
         aliases=["bj"],
         help="Play blackjack. Usage: ,blackjack <amount|half|all>",
@@ -806,7 +841,6 @@ class Economy(commands.Cog):
         player_total = view.total(player)
         dealer_total = view.total(dealer)
 
-        # Natural blackjack is settled immediately.
         if player_total == 21:
             view.finished = True
             view.disable_controls()
