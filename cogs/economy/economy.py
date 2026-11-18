@@ -27,6 +27,7 @@ from cogs.economy._common import (
 from cogs.economy.games._blackjack import BlackjackView
 from cogs.economy.games._quick_games import QuickGameView
 from cogs.economy.games._slots import SlotsView
+from cogs.economy.games._mines import MinesView
 from cogs.economy.games._manager import ArcadeManager
 from cogs.economy.games._streak_views import StreakDecisionView
 from cogs.economy.games._streaks import (
@@ -701,6 +702,42 @@ class Economy(commands.Cog):
             embed=view.slot_embed(
                 ["❔", "❔", "❔"],
                 f"**Wager:** {money(amount)}\nPress Spin to play.",
+            ),
+            view=view,
+        )
+
+    @commands.command(
+        name="mines",
+        help="Play ONYX Mines. Usage: ,mines <amount|half|all> [mine_count]",
+    )
+    async def mines(self, ctx, amount: str, mine_count: int = 3):
+        if not 1 <= mine_count <= 19:
+            return await ctx.send(
+                "Choose between 1 and 19 mines."
+            )
+
+        game_result = await self.begin_game(
+            ctx,
+            amount,
+            "mines_wager",
+        )
+        if not game_result:
+            return
+
+        reference, amount = game_result
+
+        view = MinesView(
+            self.bot,
+            ctx.author.id,
+            amount,
+            reference,
+            mines=mine_count,
+            result_handler=self.arcade.result_handler,
+        )
+
+        await ctx.send(
+            embed=view.current_embed(
+                "Pick a tile. Cash out whenever you want after a safe pick."
             ),
             view=view,
         )
