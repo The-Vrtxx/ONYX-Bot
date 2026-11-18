@@ -1,4 +1,3 @@
-
 """ONYX European Roulette game view."""
 
 import random
@@ -30,6 +29,7 @@ BET_OPTIONS = {
 def number_color(number):
     if number == 0:
         return "🟢 Green"
+
     return "🔴 Red" if number in RED_NUMBERS else "⚫ Black"
 
 
@@ -91,29 +91,30 @@ class RouletteView(PlayerView):
 
         self.result_handler = result_handler
         self.selected_bet = None
-
         self.selection_buttons = {}
 
         options = [
-            ("Red", "red", discord.ButtonStyle.danger, 0),
-            ("Black", "black", discord.ButtonStyle.secondary, 0),
-            ("Odd", "odd", discord.ButtonStyle.primary, 1),
-            ("Even", "even", discord.ButtonStyle.primary, 1),
-            ("1–18", "low", discord.ButtonStyle.success, 1),
-            ("19–36", "high", discord.ButtonStyle.success, 1),
-            ("1st Dozen", "dozen1", discord.ButtonStyle.secondary, 2),
-            ("2nd Dozen", "dozen2", discord.ButtonStyle.secondary, 2),
-            ("3rd Dozen", "dozen3", discord.ButtonStyle.secondary, 2),
+            ("Red", "red", 0),
+            ("Black", "black", 0),
+            ("Odd", "odd", 1),
+            ("Even", "even", 1),
+            ("1–18", "low", 1),
+            ("19–36", "high", 1),
+            ("1st Dozen", "dozen1", 2),
+            ("2nd Dozen", "dozen2", 2),
+            ("3rd Dozen", "dozen3", 2),
         ]
 
-        for label, bet_type, style, row in options:
+        for label, bet_type, row in options:
             button = discord.ui.Button(
                 label=label,
-                style=style,
+                style=discord.ButtonStyle.danger,
                 row=row,
                 custom_id=f"onyx_roulette_{bet_type}",
             )
+
             button.callback = self.make_selection_callback(bet_type)
+
             self.selection_buttons[bet_type] = button
             self.add_item(button)
 
@@ -124,6 +125,7 @@ class RouletteView(PlayerView):
             row=3,
             custom_id="onyx_roulette_spin",
         )
+
         self.spin_button.callback = self.spin
         self.add_item(self.spin_button)
 
@@ -137,13 +139,15 @@ class RouletteView(PlayerView):
 
             self.selected_bet = bet_type
 
+            # All unselected bets are red.
+            # The selected bet is green.
             for key, button in self.selection_buttons.items():
                 button.disabled = False
-                button.style = (
-                    discord.ButtonStyle.primary
-                    if key == bet_type
-                    else self.original_style(key)
-                )
+
+                if key == bet_type:
+                    button.style = discord.ButtonStyle.success
+                else:
+                    button.style = discord.ButtonStyle.danger
 
             await interaction.response.edit_message(
                 embed=self.current_embed(
@@ -154,18 +158,6 @@ class RouletteView(PlayerView):
             )
 
         return callback
-
-    @staticmethod
-    def original_style(bet_type):
-        if bet_type == "red":
-            return discord.ButtonStyle.danger
-        if bet_type == "black":
-            return discord.ButtonStyle.secondary
-        if bet_type in {"low", "high"}:
-            return discord.ButtonStyle.success
-        if bet_type.startswith("dozen"):
-            return discord.ButtonStyle.secondary
-        return discord.ButtonStyle.primary
 
     def current_embed(self, message=None):
         selected = (
@@ -182,7 +174,9 @@ class RouletteView(PlayerView):
             "Odd / Even — 2× total return\n"
             "1–18 / 19–36 — 2× total return\n"
             "Each Dozen — 3× total return\n\n"
-            "🟢 Zero wins against every outside bet."
+            "🟢 Zero wins against every outside bet.\n\n"
+            "🔴 Unselected buttons\n"
+            "🟢 Selected button"
         )
 
         if message:
@@ -215,10 +209,12 @@ class RouletteView(PlayerView):
 
             if won:
                 config = await get_arcade_config(self.bot)
+
                 maximum_payout = max(
                     0,
                     int(config["maximum_payout"]),
                 )
+
                 payout = min(
                     self.bet * multiplier,
                     maximum_payout,
