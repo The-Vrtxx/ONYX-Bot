@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
         "mines": True,
         "roulette": True,
         "crash": True,
+        "baccarat": True,
     },
     "streaks_enabled": True,
     "minimum_wager": 1,
