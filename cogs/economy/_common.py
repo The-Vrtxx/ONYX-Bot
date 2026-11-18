@@ -81,6 +81,7 @@ async def place_wager(bot, user_id, amount, source):
         "dice",
         "betflip",
         "mines",
+        "roulette",
     }:
         return {
             "ok": False,
@@ -317,7 +318,7 @@ class PlayerView(discord.ui.View):
             self.settling = False
 
     async def on_timeout(self):
-        """Refund or release an unfinished game when its controls expire."""
+        """Refund or release an unfinished game when the controls expire."""
 
         try:
             await self.refund()
