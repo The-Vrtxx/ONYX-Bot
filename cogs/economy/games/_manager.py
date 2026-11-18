@@ -12,6 +12,7 @@ from cogs.economy.games._blackjack import BlackjackView
 from cogs.economy.games._quick_games import QuickGameView
 from cogs.economy.games._slots import SlotsView
 from cogs.economy.games._mines import MinesView
+from cogs.economy.games._roulette import RouletteView
 from cogs.economy.games._streak_views import StreakDecisionView
 from cogs.economy.games._streaks import (
     begin_streak_round,
@@ -31,6 +32,7 @@ GAME_NAMES = {
     "dice": "🎲 ONYX DICE",
     "betflip": "🪙 ONYX BETFLIP",
     "mines": "💣 ONYX MINES",
+    "roulette": "🎡 ONYX ROULETTE",
 }
 
 
@@ -454,6 +456,24 @@ class ArcadeManager:
 
             if game == "mines":
                 view = MinesView(
+                    self.bot,
+                    interaction.user.id,
+                    wager,
+                    reference,
+                    result_handler=self.result_handler,
+                    streak_id=streak_id,
+                )
+
+                return await edit_game_message(
+                    interaction,
+                    embed=view.current_embed(
+                        "🔥 Streak round! Your entire streak pot is at risk."
+                    ),
+                    view=view,
+                )
+
+            if game == "roulette":
+                view = RouletteView(
                     self.bot,
                     interaction.user.id,
                     wager,
