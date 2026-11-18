@@ -1,7 +1,8 @@
 
 """ONYX arcade manager.
 
-Connects game results, Credits payouts, and cross-game streaks.
+Connects game results, Credits payouts, persistent statistics,
+and cross-game streaks.
 """
 
 import uuid
@@ -19,6 +20,7 @@ from cogs.economy.games._streaks import (
     lose_streak,
     record_streak_win,
 )
+from cogs.economy.games._stats import record_arcade_round
 
 
 GAME_NAMES = {
@@ -42,6 +44,25 @@ class ArcadeManager:
     def __init__(self, bot):
         self.bot = bot
 
+    async def record_stats(self, game_view, outcome, payout=0):
+        """Record a settled game without allowing stats errors to affect payouts."""
+
+        try:
+            await record_arcade_round(
+                self.bot.db.pool,
+                reference=game_view.reference,
+                user_id=game_view.user_id,
+                game=game_view.game,
+                wager=game_view.bet,
+                outcome=outcome,
+                payout=payout,
+            )
+        except Exception:
+            # Statistics must never interrupt a completed game settlement.
+            return False
+
+        return True
+
     async def result_handler(
         self,
         interaction,
@@ -52,7 +73,6 @@ class ArcadeManager:
     ):
         user_id = int(game_view.user_id)
 
-        # Always use the player's current global Discord identity.
         display_name = (
             getattr(interaction.user, "global_name", None)
             or interaction.user.name
@@ -69,6 +89,12 @@ class ArcadeManager:
                     self.bot,
                     user_id,
                     streak_id,
+                )
+
+                await self.record_stats(
+                    game_view,
+                    "push",
+                    int(game_view.bet),
                 )
 
                 streak = await get_streak(self.bot, user_id)
@@ -105,7 +131,13 @@ class ArcadeManager:
                 username=username,
             )
 
-            if not paid.get("ok"):
+            if paid.get("ok"):
+                await self.record_stats(
+                    game_view,
+                    "push",
+                    int(payout),
+                )
+            else:
                 result_text += (
                     "\n\n⚠️ The wager return could not be processed. "
                     "Please contact an ONYX administrator."
@@ -140,6 +172,8 @@ class ArcadeManager:
                         "\n\n⚠️ Streak settlement needs "
                         "administrator review."
                     )
+
+            await self.record_stats(game_view, "loss", 0)
 
             return await edit_game_message(
                 interaction,
@@ -193,6 +227,8 @@ class ArcadeManager:
 
             streak = updated["streak"]
 
+            await self.record_stats(game_view, "win", 0)
+
             return await self.show_decision(
                 interaction,
                 streak,
@@ -226,6 +262,11 @@ class ArcadeManager:
             )
 
             if paid.get("ok"):
+                await self.record_stats(
+                    game_view,
+                    "win",
+                    int(payout),
+                )
                 result_text += (
                     "\n\nYour winnings have been added to your wallet. "
                     "A streak could not be opened."
@@ -243,6 +284,12 @@ class ArcadeManager:
                 ),
                 view=None,
             )
+
+        await self.record_stats(
+            game_view,
+            "win",
+            int(payout),
+        )
 
         return await self.show_decision(
             interaction,
@@ -330,7 +377,6 @@ class ArcadeManager:
                 player_total = view.total(player)
                 dealer_total = view.total(dealer)
 
-                # A natural in a streak round settles immediately.
                 if player_total == 21 and dealer_total == 21:
                     view.finished = True
                     view.disable_controls()
@@ -432,7 +478,6 @@ class ArcadeManager:
             )
 
         except Exception:
-            # If the game could not be displayed, restore the streak.
             await cancel_streak_round(
                 self.bot,
                 interaction.user.id,
