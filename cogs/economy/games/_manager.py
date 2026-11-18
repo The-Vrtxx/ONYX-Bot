@@ -13,6 +13,7 @@ from cogs.economy.games._quick_games import QuickGameView
 from cogs.economy.games._slots import SlotsView
 from cogs.economy.games._mines import MinesView
 from cogs.economy.games._roulette import RouletteView
+from cogs.economy.games._crash import CrashView
 from cogs.economy.games._streak_views import StreakDecisionView
 from cogs.economy.games._streaks import (
     begin_streak_round,
@@ -33,6 +34,7 @@ GAME_NAMES = {
     "betflip": "🪙 ONYX BETFLIP",
     "mines": "💣 ONYX MINES",
     "roulette": "🎡 ONYX ROULETTE",
+    "crash": "🚀 ONYX CRASH",
 }
 
 
@@ -489,6 +491,29 @@ class ArcadeManager:
                     ),
                     view=view,
                 )
+
+            if game == "crash":
+                view = CrashView(
+                    self.bot,
+                    interaction.user,
+                    wager,
+                    reference,
+                    result_handler=self.result_handler,
+                    streak_id=streak_id,
+                )
+
+                await edit_game_message(
+                    interaction,
+                    embed=view.current_embed(
+                        "🔥 Streak round! Your entire streak pot is at risk. "
+                        "Cash out before the multiplier crashes."
+                    ),
+                    view=view,
+                )
+
+                message = await interaction.original_response()
+                view.start(message)
+                return
 
             view = QuickGameView(
                 self.bot,
