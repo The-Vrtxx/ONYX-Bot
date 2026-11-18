@@ -30,6 +30,7 @@ from cogs.economy.games._slots import SlotsView
 from cogs.economy.games._mines import MinesView
 from cogs.economy.games._roulette import RouletteView
 from cogs.economy.games._crash import CrashView
+from cogs.economy.games._baccarat import BaccaratView
 from cogs.economy.games._manager import ArcadeManager
 from cogs.economy.games._streak_views import StreakDecisionView
 from cogs.economy.games._streaks import (
@@ -770,6 +771,38 @@ class Economy(commands.Cog):
         await ctx.send(
             embed=view.current_embed(
                 "Choose your bet, then spin the wheel!"
+            ),
+            view=view,
+        )
+
+    @commands.command(
+        name="baccarat",
+        aliases=["bac"],
+        help="Play ONYX Baccarat. Usage: ,baccarat <amount|half|all>",
+    )
+    async def baccarat(self, ctx, amount: str):
+        game_result = await self.begin_game(
+            ctx,
+            amount,
+            "baccarat_wager",
+        )
+
+        if not game_result:
+            return
+
+        reference, amount = game_result
+
+        view = BaccaratView(
+            self.bot,
+            ctx.author.id,
+            amount,
+            reference,
+            result_handler=self.arcade.result_handler,
+        )
+
+        await ctx.send(
+            embed=view.current_embed(
+                "Choose Player, Banker, or Tie, then deal the cards."
             ),
             view=view,
         )
