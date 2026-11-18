@@ -75,7 +75,7 @@ async def place_wager(bot, user_id, amount, source):
 
     game = str(source).removesuffix("_wager").casefold()
 
-    if game not in {
+        if game not in {
         "blackjack",
         "slots",
         "dice",
@@ -83,6 +83,7 @@ async def place_wager(bot, user_id, amount, source):
         "mines",
         "roulette",
         "crash",
+        "baccarat",
     }:
         return {
             "ok": False,
