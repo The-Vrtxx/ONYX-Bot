@@ -42,6 +42,7 @@ class ArcadeCommands(commands.Cog):
                 "Welcome to the ONYX Arcade!\n\n"
                 "**CASINO GAMES**\n"
                 "🃏 `,blackjack <amount>` — Blackjack\n"
+                "🃏 `,baccarat <amount>` — Baccarat\n"
                 "🎰 `,slots <amount>` — Slot machine\n"
                 "🎲 `,dice <amount>` — High or Low\n"
                 "🪙 `,betflip <amount>` — Heads or Tails\n"
