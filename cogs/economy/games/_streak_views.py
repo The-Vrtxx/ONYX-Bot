@@ -216,6 +216,17 @@ class StreakDecisionView(discord.ui.View):
 class StreakGameSelectView(discord.ui.View):
     """Choose which enabled arcade game to use for the next streak round."""
 
+    GAMES = (
+        "blackjack",
+        "slots",
+        "dice",
+        "betflip",
+        "mines",
+        "roulette",
+        "crash",
+        "baccarat",
+    )
+
     def __init__(
         self,
         bot,
@@ -251,10 +262,13 @@ class StreakGameSelectView(discord.ui.View):
         return True
 
     async def refresh_game_buttons(self):
+        """Refresh all eight buttons using the latest arcade settings."""
+
         config = await get_arcade_config(self.bot)
 
-        for game in ("blackjack", "slots", "dice", "betflip"):
+        for game in self.GAMES:
             button = getattr(self, game)
+
             button.disabled = (
                 not config["enabled"]
                 or not config["streaks_enabled"]
@@ -300,6 +314,7 @@ class StreakGameSelectView(discord.ui.View):
         label="Blackjack",
         emoji="🃏",
         style=discord.ButtonStyle.primary,
+        row=0,
     )
     async def blackjack(self, interaction, button):
         await self.choose(interaction, "blackjack")
@@ -308,6 +323,7 @@ class StreakGameSelectView(discord.ui.View):
         label="Slots",
         emoji="🎰",
         style=discord.ButtonStyle.primary,
+        row=0,
     )
     async def slots(self, interaction, button):
         await self.choose(interaction, "slots")
@@ -316,7 +332,7 @@ class StreakGameSelectView(discord.ui.View):
         label="Dice",
         emoji="🎲",
         style=discord.ButtonStyle.primary,
-        row=1,
+        row=0,
     )
     async def dice(self, interaction, button):
         await self.choose(interaction, "dice")
@@ -325,7 +341,43 @@ class StreakGameSelectView(discord.ui.View):
         label="Betflip",
         emoji="🪙",
         style=discord.ButtonStyle.primary,
-        row=1,
+        row=0,
     )
     async def betflip(self, interaction, button):
         await self.choose(interaction, "betflip")
+
+    @discord.ui.button(
+        label="Mines",
+        emoji="💣",
+        style=discord.ButtonStyle.primary,
+        row=1,
+    )
+    async def mines(self, interaction, button):
+        await self.choose(interaction, "mines")
+
+    @discord.ui.button(
+        label="Roulette",
+        emoji="🎡",
+        style=discord.ButtonStyle.primary,
+        row=1,
+    )
+    async def roulette(self, interaction, button):
+        await self.choose(interaction, "roulette")
+
+    @discord.ui.button(
+        label="Crash",
+        emoji="🚀",
+        style=discord.ButtonStyle.primary,
+        row=1,
+    )
+    async def crash(self, interaction, button):
+        await self.choose(interaction, "crash")
+
+    @discord.ui.button(
+        label="Baccarat",
+        emoji="🃏",
+        style=discord.ButtonStyle.primary,
+        row=1,
+    )
+    async def baccarat(self, interaction, button):
+        await self.choose(interaction, "baccarat")
