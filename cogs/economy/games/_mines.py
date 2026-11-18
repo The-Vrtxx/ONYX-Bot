@@ -6,11 +6,8 @@ import random
 
 import discord
 
-from cogs.economy._common import (
-    PlayerView,
-    make_embed,
-    money,
-)
+from cogs.economy._common import PlayerView, make_embed, money
+from cogs.economy.games._controls import get_arcade_config
 
 
 GRID_SIZE = 20
@@ -136,16 +133,30 @@ class MinesView(PlayerView):
 
         return make_embed("💣 ONYX MINES", description)
 
-    def update_multiplier(self):
-        """Refresh the multiplier and current potential payout."""
+    async def update_multiplier(self):
+        """Refresh the multiplier and apply the configured payout cap."""
 
         self.current_multiplier = calculate_multiplier(
             self.mine_count,
             self.safe_picks,
         )
 
-        self.current_payout = int(
+        calculated_payout = int(
             math.floor(self.bet * self.current_multiplier)
+        )
+
+        try:
+            config = await get_arcade_config(self.bot)
+            maximum_payout = max(
+                0,
+                int(config["maximum_payout"]),
+            )
+        except Exception:
+            maximum_payout = 2_000_000
+
+        self.current_payout = min(
+            calculated_payout,
+            maximum_payout,
         )
 
     def disable_game(self):
@@ -162,6 +173,37 @@ class MinesView(PlayerView):
             button.label = "💣"
             button.style = discord.ButtonStyle.danger
             button.disabled = True
+
+    async def settle_cashout(self, interaction):
+        """Settle a cash-out when the caller already owns the lock."""
+
+        self.finished = True
+        self.disable_game()
+        self.reveal_all_mines()
+
+        payout = int(self.current_payout)
+
+        result = (
+            f"💰 You cashed out after **{self.safe_picks}** "
+            f"safe picks!\n"
+            f"**Multiplier:** {self.current_multiplier:.2f}x\n"
+            f"**Payout:** {money(payout)}"
+        )
+
+        if self.result_handler:
+            await self.result_handler(
+                interaction,
+                self,
+                "win",
+                payout,
+                result,
+            )
+            return
+
+        await interaction.response.edit_message(
+            embed=self.current_embed(result),
+            view=self,
+        )
 
     async def reveal_tile(self, interaction, index):
         """Reveal one tile and settle immediately if it is a mine."""
@@ -218,10 +260,10 @@ class MinesView(PlayerView):
             button.disabled = True
 
             self.safe_picks += 1
-            self.update_multiplier()
+            await self.update_multiplier()
 
             if self.safe_picks >= GRID_SIZE - self.mine_count:
-                await self.cash_out(interaction)
+                await self.settle_cashout(interaction)
                 return
 
             await interaction.response.edit_message(
@@ -252,35 +294,7 @@ class MinesView(PlayerView):
         self.settling = True
 
         try:
-            self.finished = True
-            self.disable_game()
-
-            self.reveal_all_mines()
-
-            payout = int(self.current_payout)
-
-            result = (
-                f"💰 You cashed out after **{self.safe_picks}** "
-                f"safe picks!\n"
-                f"**Multiplier:** {self.current_multiplier:.2f}x\n"
-                f"**Payout:** {money(payout)}"
-            )
-
-            if self.result_handler:
-                await self.result_handler(
-                    interaction,
-                    self,
-                    "win",
-                    payout,
-                    result,
-                )
-                return
-
-            await interaction.response.edit_message(
-                embed=self.current_embed(result),
-                view=self,
-            )
-
+            await self.settle_cashout(interaction)
         finally:
             self.settling = False
 
