@@ -35,7 +35,10 @@ from cogs.economy.games._streaks import (
     get_streak,
 )
 from cogs.economy.games._controls import ensure_arcade_control_tables
-from cogs.economy.games._stats import ensure_arcade_stats_tables
+from cogs.economy.games._stats import (
+    ensure_arcade_stats_tables,
+    record_arcade_round,
+)
 
 COLOR = discord.Color.from_rgb(25, 190, 190)
 
@@ -180,6 +183,32 @@ class Economy(commands.Cog):
             await ctx.send(
                 "The global ONYX economy is currently disabled."
             )
+            return False
+
+        return True
+
+    async def record_blackjack_stats(
+        self,
+        reference,
+        user_id,
+        wager,
+        outcome,
+        payout=0,
+    ):
+        """Record an immediately settled opening Blackjack result."""
+
+        try:
+            await record_arcade_round(
+                self.bot.db.pool,
+                reference=reference,
+                user_id=user_id,
+                game="blackjack",
+                wager=wager,
+                outcome=outcome,
+                payout=payout,
+            )
+        except Exception:
+            # Stats must never interfere with a settled wallet transaction.
             return False
 
         return True
@@ -715,7 +744,7 @@ class Economy(commands.Cog):
             view.disable_controls()
 
             if dealer_total == 21:
-                await pay_out(
+                paid = await pay_out(
                     self.bot,
                     ctx.author.id,
                     amount,
@@ -723,13 +752,26 @@ class Economy(commands.Cog):
                     reference,
                 )
 
+                if paid.get("ok"):
+                    await self.record_blackjack_stats(
+                        reference,
+                        ctx.author.id,
+                        amount,
+                        "push",
+                        amount,
+                    )
+
+                result = (
+                    "🤝 Both you and the dealer have blackjack. "
+                    "Your wager was returned."
+                    if paid.get("ok")
+                    else "⚠️ Your wager return needs administrator review."
+                )
+
                 return await ctx.send(
                     embed=view.display(
                         reveal=True,
-                        result=(
-                            "🤝 Both you and the dealer have blackjack. "
-                            "Your wager was returned."
-                        ),
+                        result=result,
                     ),
                     view=view,
                 )
@@ -745,6 +787,14 @@ class Economy(commands.Cog):
             )
 
             if created.get("ok"):
+                await self.record_blackjack_stats(
+                    reference,
+                    ctx.author.id,
+                    amount,
+                    "win",
+                    natural_payout,
+                )
+
                 streak_view = StreakDecisionView(
                     bot=self.bot,
                     user_id=ctx.author.id,
@@ -779,6 +829,15 @@ class Economy(commands.Cog):
                 reference,
             )
 
+            if paid.get("ok"):
+                await self.record_blackjack_stats(
+                    reference,
+                    ctx.author.id,
+                    amount,
+                    "win",
+                    natural_payout,
+                )
+
             result = (
                 f"🌟 Natural Blackjack! "
                 f"You received {money(natural_payout)}."
@@ -794,6 +853,14 @@ class Economy(commands.Cog):
         if dealer_total == 21:
             view.finished = True
             view.disable_controls()
+
+            await self.record_blackjack_stats(
+                reference,
+                ctx.author.id,
+                amount,
+                "loss",
+                0,
+            )
 
             return await ctx.send(
                 embed=view.display(
