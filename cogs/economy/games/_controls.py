@@ -17,6 +17,7 @@ DEFAULT_CONFIG = {
         "betflip": True,
         "mines": True,
         "roulette": True,
+        "crash": True,
     },
     "streaks_enabled": True,
     "minimum_wager": 1,
