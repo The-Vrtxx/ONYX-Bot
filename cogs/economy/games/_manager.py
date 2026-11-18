@@ -11,6 +11,7 @@ from cogs.economy._common import make_embed, money, pay_out
 from cogs.economy.games._blackjack import BlackjackView
 from cogs.economy.games._quick_games import QuickGameView
 from cogs.economy.games._slots import SlotsView
+from cogs.economy.games._mines import MinesView
 from cogs.economy.games._streak_views import StreakDecisionView
 from cogs.economy.games._streaks import (
     begin_streak_round,
@@ -21,6 +22,7 @@ from cogs.economy.games._streaks import (
     record_streak_win,
 )
 from cogs.economy.games._stats import record_arcade_round
+from cogs.economy.games._controls import game_is_enabled
 
 
 GAME_NAMES = {
@@ -28,6 +30,7 @@ GAME_NAMES = {
     "slots": "🎰 ONYX SLOTS",
     "dice": "🎲 ONYX DICE",
     "betflip": "🪙 ONYX BETFLIP",
+    "mines": "💣 ONYX MINES",
 }
 
 
@@ -58,7 +61,6 @@ class ArcadeManager:
                 payout=payout,
             )
         except Exception:
-            # Statistics must never interrupt a completed game settlement.
             return False
 
         return True
@@ -333,6 +335,12 @@ class ArcadeManager:
         if game not in GAME_NAMES:
             raise ValueError("Unsupported ONYX arcade game.")
 
+        if not await game_is_enabled(self.bot, game):
+            return await interaction.response.send_message(
+                f"ONYX {game.title()} is currently disabled.",
+                ephemeral=True,
+            )
+
         started = await begin_streak_round(
             self.bot,
             interaction.user.id,
@@ -391,7 +399,6 @@ class ArcadeManager:
                             "Your streak pot is unchanged."
                         ),
                     )
-
                     return
 
                 if player_total == 21:
@@ -405,7 +412,6 @@ class ArcadeManager:
                         wager * 2,
                         "🌟 **Natural Blackjack!** You won this streak round.",
                     )
-
                     return
 
                 if dealer_total == 21:
@@ -419,7 +425,6 @@ class ArcadeManager:
                         0,
                         "Dealer has blackjack. You lost this streak round.",
                     )
-
                     return
 
                 return await edit_game_message(
@@ -443,6 +448,24 @@ class ArcadeManager:
                     embed=view.slot_embed(
                         ["❔", "❔", "❔"],
                         "Press Spin to risk your streak pot.",
+                    ),
+                    view=view,
+                )
+
+            if game == "mines":
+                view = MinesView(
+                    self.bot,
+                    interaction.user.id,
+                    wager,
+                    reference,
+                    result_handler=self.result_handler,
+                    streak_id=streak_id,
+                )
+
+                return await edit_game_message(
+                    interaction,
+                    embed=view.current_embed(
+                        "🔥 Streak round! Your entire streak pot is at risk."
                     ),
                     view=view,
                 )
