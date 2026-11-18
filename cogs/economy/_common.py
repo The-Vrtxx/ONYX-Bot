@@ -82,6 +82,7 @@ async def place_wager(bot, user_id, amount, source):
         "betflip",
         "mines",
         "roulette",
+        "crash",
     }:
         return {
             "ok": False,
