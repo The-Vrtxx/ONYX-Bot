@@ -1,4 +1,3 @@
-
 """ONYX global Credits economy and arcade games."""
 
 import random
@@ -28,6 +27,7 @@ from cogs.economy.games._blackjack import BlackjackView
 from cogs.economy.games._quick_games import QuickGameView
 from cogs.economy.games._slots import SlotsView
 from cogs.economy.games._mines import MinesView
+from cogs.economy.games._roulette import RouletteView
 from cogs.economy.games._manager import ArcadeManager
 from cogs.economy.games._streak_views import StreakDecisionView
 from cogs.economy.games._streaks import (
@@ -738,6 +738,37 @@ class Economy(commands.Cog):
         await ctx.send(
             embed=view.current_embed(
                 "Pick a tile. Cash out whenever you want after a safe pick."
+            ),
+            view=view,
+        )
+
+    @commands.command(
+        name="roulette",
+        aliases=["rl"],
+        help="Play ONYX Roulette. Usage: ,roulette <amount|half|all>",
+    )
+    async def roulette(self, ctx, amount: str):
+        game_result = await self.begin_game(
+            ctx,
+            amount,
+            "roulette_wager",
+        )
+        if not game_result:
+            return
+
+        reference, amount = game_result
+
+        view = RouletteView(
+            self.bot,
+            ctx.author.id,
+            amount,
+            reference,
+            result_handler=self.arcade.result_handler,
+        )
+
+        await ctx.send(
+            embed=view.current_embed(
+                "Choose your bet, then spin the wheel!"
             ),
             view=view,
         )
