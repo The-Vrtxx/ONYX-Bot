@@ -75,7 +75,13 @@ async def place_wager(bot, user_id, amount, source):
 
     game = str(source).removesuffix("_wager").casefold()
 
-    if game not in {"blackjack", "slots", "dice", "betflip"}:
+    if game not in {
+        "blackjack",
+        "slots",
+        "dice",
+        "betflip",
+        "mines",
+    }:
         return {
             "ok": False,
             "error": "This arcade game is not recognized.",
