@@ -5,17 +5,15 @@ from cogs.achievements.secret_definitions import SECRET_ACHIEVEMENTS
 async def unlock_secret(bot,user,secret_id,guild=None,source="discovery"):
     d=SECRET_ACHIEVEMENTS.get(secret_id)
     if not d: return False
-    await bot.db.execute("INSERT INTO onyx_achievement_secret_unlocks(user_id,secret_id,source) VALUES(?,?,?) ON CONFLICT(user_id,secret_id) DO NOTHING",(user.id,secret_id,source))
-    rows=await bot.db.fetchall("SELECT secret_id FROM onyx_achievement_secret_unlocks WHERE user_id=? AND secret_id=?",(user.id,secret_id))
-    if not rows: return False
+    inserted=await bot.db.fetchone("INSERT INTO onyx_achievement_secret_unlocks(user_id,secret_id,source) VALUES(?,?,?) ON CONFLICT(user_id,secret_id) DO NOTHING RETURNING secret_id",(user.id,secret_id,source))
+    if not inserted: return False
     await bot.db.execute("INSERT INTO onyx_achievement_titles(user_id,title,source_achievement) VALUES(?,?,?) ON CONFLICT(user_id,title) DO NOTHING",(user.id,d["title"],"secret:"+secret_id))
     msg=f"🕵️ **SECRET ACHIEVEMENT DISCOVERED!**\n{d['icon']} **{d['name']}**"
-    try: await user.send(msg)
-    except Exception: pass
     try:
-        ch=guild.system_channel if guild else None
-        if ch: await ch.send(f"{user.mention} discovered a secret ONYX achievement!")
-    except Exception: pass
+        await user.send(msg)
+    except Exception:
+        # DMs may be disabled. Never reveal secret unlocks in a server channel.
+        pass
     return True
 
 async def secret_event(bot,user,event,guild=None,command=None):
@@ -50,23 +48,37 @@ class Secrets(commands.Cog):
             if d: lines.append(f"{d['icon']} **{d['name']}**")
         await ctx.send("🕵️ **Your discovered secrets**\n"+("\n".join(lines) if lines else "No secrets discovered yet. ONYX has a few surprises..."))
     @commands.command(name="secretadmin",hidden=True)
-    async def secretadmin(self,ctx,action:str=None,member:discord.User=None,secret_id:str=None):
-        if not await self.bot.is_owner(ctx.author): return await ctx.send("⛔ Owner only.")
+    async def secretadmin(self,ctx,action:str=None,*,arguments:str=""):
+        if not await self.bot.is_owner(ctx.author):
+            return await ctx.send("⛔ Owner only.")
+        parts=arguments.split()
+        member=None
+        secret_id=None
+        if action in ("progress","unlock","lock") and parts:
+            raw=parts.pop(0).strip("<@!>")
+            try:
+                member=await self.bot.fetch_user(int(raw))
+            except (ValueError,discord.HTTPException):
+                member=None
+        if action=="view" and parts:
+            secret_id=parts[0]
+        elif action in ("unlock","lock") and parts:
+            secret_id=parts[0]
         if action=="list":
-            return await ctx.send("**Secret achievement IDs**\n"+"\n".join(f"`{k}` — {v['name']}" for k,v in SECRET_ACHIEVEMENTS.items()))
+            return await ctx.send("**Secret achievement IDs**\\n"+"\\n".join(f"`{k}` — {v['name']}" for k,v in SECRET_ACHIEVEMENTS.items()))
         if action=="view" and secret_id in SECRET_ACHIEVEMENTS:
             d=SECRET_ACHIEVEMENTS[secret_id]
-            return await ctx.send(f"**{d['name']}** (`{secret_id}`)\nExact requirement: {d['description']}\nTrigger: `{d['trigger']}`\nHint: {d['hint']}")
+            return await ctx.send(f"**{d['name']}** (`{secret_id}`)\\nExact requirement: {d['description']}\\nTrigger: `{d['trigger']}`\\nHint: {d['hint']}")
         if action=="progress" and member:
             rows=await self.bot.db.fetchall("SELECT secret_id FROM onyx_achievement_secret_unlocks WHERE user_id=?",(member.id,))
-            return await ctx.send(f"**{member}** — {len(rows)}/10 secrets found\n"+("\n".join(r["secret_id"] for r in rows) or "None yet."))
+            return await ctx.send(f"**{member}** — {len(rows)}/10 secrets found\\n"+("\\n".join(r["secret_id"] for r in rows) or "None yet."))
         if action=="unlock" and member and secret_id in SECRET_ACHIEVEMENTS:
             ok=await unlock_secret(self.bot,member,secret_id,ctx.guild,"owner")
             return await ctx.send("Awarded." if ok else "Already unlocked.")
         if action=="lock" and member and secret_id in SECRET_ACHIEVEMENTS:
             await self.bot.db.execute("DELETE FROM onyx_achievement_secret_unlocks WHERE user_id=? AND secret_id=?",(member.id,secret_id))
             return await ctx.send("Unlock record removed. Any previously earned title remains.")
-        await ctx.send("Usage: `,secretadmin list` | `,secretadmin view <id>` | `,secretadmin progress @member` | `,secretadmin unlock @member <id>` | `,secretadmin lock @member <id>`")
+        await ctx.send("Usage: `,secretadmin list` | `,secretadmin view <id>` | `,secretadmin progress @member` | `,secretadmin unlock @member <id>` | `,secretadmin lock @member <id>`. Use a member mention or numeric Discord user ID for member actions.")
 
 async def setup(bot):
     from cogs.achievements.engine import ensure_tables

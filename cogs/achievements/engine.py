@@ -49,9 +49,8 @@ async def evaluate(bot,uid,guild=None,member=None,source="automatic"):
         if aid in already or await get_metric(db,uid,d["metric"])<int(d["target"]): continue
         extra=d.get("extra_metric")
         if extra and await get_metric(db,uid,extra)<int(d.get("extra_target",0)): continue
-        await db.execute("INSERT INTO onyx_achievement_unlocks(user_id,achievement_id,reward_paid,source) VALUES(?,?,0,?) ON CONFLICT(user_id,achievement_id) DO NOTHING",(int(uid),aid,source))
-        exists=await db.fetchone("SELECT achievement_id FROM onyx_achievement_unlocks WHERE user_id=? AND achievement_id=?",(int(uid),aid))
-        if not exists: continue
+        inserted=await db.fetchone("INSERT INTO onyx_achievement_unlocks(user_id,achievement_id,reward_paid,source) VALUES(?,?,0,?) ON CONFLICT(user_id,achievement_id) DO NOTHING RETURNING achievement_id",(int(uid),aid,source))
+        if not inserted: continue
         reward=int(d.get("reward",0) or 0)
         if reward and getattr(db,"backend",None)=="postgres" and getattr(db,"pool",None):
             from currency_system import grant_credits
@@ -77,15 +76,14 @@ async def evaluate(bot,uid,guild=None,member=None,source="automatic"):
     return new
 
 async def notify(member,guild,new):
+    """Send achievement unlock details privately; never post in a server channel."""
     if member is None: return
     msg="🏆 **ONYX Achievement Unlocked!**\n"+"\n".join(f"{d['icon']} **{d['name']}** — {d['tier']}" for _,d in new)
-    try: await member.send(msg)
-    except Exception: pass
     try:
-        channel=guild.system_channel if guild else None
-        if channel and guild.me and channel.permissions_for(guild.me).send_messages:
-            await channel.send(f"{member.mention} unlocked an ONYX achievement!",allowed_mentions=__import__("discord").AllowedMentions(users=True))
-    except Exception: pass
+        await member.send(msg)
+    except Exception:
+        # DMs may be disabled. Keep the unlock and reward; do not fall back to a public post.
+        pass
 
 async def record_command(bot,ctx):
     uid=ctx.author.id; db=bot.db
