@@ -1,0 +1,36 @@
+"""Original 20 arcade IDs/rewards preserved; 10 new achievements added."""
+CASINO_GAMES=("blackjack","slots","dice","betflip","mines","roulette","crash","baccarat")
+def A(name,description,tier,icon,metric,target,reward=0,**extra):
+    return dict(name=name,description=description,tier=tier,icon=icon,metric=metric,target=target,reward=reward,**extra)
+ARCADE_ACHIEVEMENTS={
+"first_steps":A("First Steps","Complete your first arcade game.","Bronze","🎮","arcade_games",1,250),
+"taste_of_victory":A("Taste of Victory","Win your first arcade game.","Bronze","🥇","arcade_wins",1,500),
+"regular_player":A("Regular Player","Complete 10 arcade games.","Bronze","🕹️","arcade_games",10,1000),
+"variety_player":A("Variety Player","Play 3 different casino games.","Bronze","🎲","arcade_unique_games",3,1000),
+"first_fortune":A("First Fortune","Receive a return of 5,000 Credits or more.","Bronze","💰","arcade_biggest_return",5000,1000),
+"arcade_veteran":A("Arcade Veteran","Complete 100 arcade games.","Silver","🏆","arcade_games",100,5000),
+"winning_habit":A("Winning Habit","Win 25 arcade games.","Silver","🌟","arcade_wins",25,2500),
+"high_roller":A("High Roller","Wager 100,000 Credits cumulatively.","Silver","💎","arcade_wagered",100000,2500),
+"game_collector":A("Game Collector","Play all 8 casino games.","Silver","🎯","arcade_unique_games",8,5000),
+"big_payday":A("Big Payday","Receive a return of 50,000 Credits or more.","Silver","💵","arcade_biggest_return",50000,5000),
+"arcade_legend":A("Arcade Legend","Complete 500 arcade games.","Gold","👑","arcade_games",500,15000),
+"unstoppable":A("Unstoppable","Win 100 arcade games.","Gold","🔥","arcade_wins",100,15000),
+"millionaire_gambler":A("Millionaire Gambler","Wager 1,000,000 Credits cumulatively.","Gold","💠","arcade_wagered",1000000,10000),
+"master_collector":A("Master Collector","Win at least once in all 8 casino games.","Gold","🏅","arcade_unique_won_games",8,20000),
+"massive_payday":A("Massive Payday","Receive a return of 250,000 Credits or more.","Gold","💸","arcade_biggest_return",250000,25000),
+"onyx_immortal":A("ONYX Immortal","Complete 2,500 arcade games.","Diamond","⚜️","arcade_games",2500,50000),
+"perfect_dedication":A("Perfect Dedication","Win 500 arcade games.","Diamond","💫","arcade_wins",500,50000),
+"billionaires_path":A("Billionaire's Path","Wager 10,000,000 Credits cumulatively.","Diamond","💎","arcade_wagered",10000000,75000),
+"ultimate_collector":A("The Ultimate Collector","Win 100 times and win in all 8 casino games.","Diamond","🏆","arcade_wins",100,100000,extra_metric="arcade_unique_won_games",extra_target=8),
+"legendary_fortune":A("Legendary Fortune","Receive a return of 1,000,000 Credits or more.","Diamond","🌌","arcade_biggest_return",1000000,150000),
+"lucky_seven":A("Lucky Seven","Win 7 arcade games.","Bronze","🍀","arcade_wins",7,1500,title="Lucky"),
+"hot_streak":A("Hot Streak","Win 5 arcade games in a row.","Silver","🔥","arcade_best_win_streak",5,3000,title="On Fire"),
+"on_a_roll":A("On a Roll","Win 10 arcade games in a row.","Gold","🎳","arcade_best_win_streak",10,10000,title="Unstoppable"),
+"risk_taker":A("Risk Taker","Wager your entire available Credits balance in one arcade round.","Gold","🎲","arcade_all_in_rounds",1,5000,title="Risk Taker"),
+"comeback_kid":A("Comeback Kid","Win after 5 consecutive arcade losses.","Gold","🦾","arcade_comeback_wins",1,7500,title="Comeback Kid"),
+"versatile_victor":A("Versatile Victor","Win at least once in 4 different arcade games.","Silver","🧭","arcade_unique_won_games",4,4000,title="Versatile"),
+"double_or_nothing":A("Double or Nothing","Receive a payout at least twice the wager in one round.","Silver","✌️","arcade_best_payout_multiplier_x100",200,3000,title="Double Down"),
+"big_spender":A("Big Spender","Wager 500,000 Credits cumulatively.","Gold","💳","arcade_wagered",500000,7500,title="Big Spender"),
+"fortune_hunter":A("Fortune Hunter","Receive 1,000,000 Credits in total arcade payouts.","Diamond","🗺️","arcade_total_payout",1000000,25000,title="Fortune Hunter"),
+"streak_master":A("Streak Master","Reach a 10-win streak across arcade games.","Diamond","👑","arcade_best_win_streak",10,20000,title="Streak Master"),
+}

@@ -1,1 +1,1 @@
-
+"""Achievement definition categories."""
