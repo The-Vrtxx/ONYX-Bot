@@ -1,0 +1,17 @@
+FILE: cogs/support/tickets.py
+
+In Tickets.create_ticket(), immediately after the successful INSERT INTO
+onyx_tickets, add:
+
+    try:
+        from cogs.achievements.engine import add_metric, evaluate
+        await add_metric(self.bot.db, interaction.user.id, "tickets_opened")
+        await evaluate(
+            self.bot, interaction.user.id,
+            guild=guild, member=interaction.user,
+        )
+    except Exception:
+        pass
+
+The ticket insert is later in create_ticket() than the source excerpt reviewed.
+Find that INSERT and place the hook after it, not after channel creation.

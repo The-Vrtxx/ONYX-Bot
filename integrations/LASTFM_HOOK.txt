@@ -1,0 +1,16 @@
+FILE: cogs/integrations/lastfm.py
+
+Only after the successful Last.fm account link has been saved to
+lastfm_auth_sessions or lastfm_users, add:
+
+    try:
+        from cogs.achievements.engine import set_metric, evaluate
+        await set_metric(self.bot.db, ctx.author.id, "lastfm_connected", 1)
+        await evaluate(
+            self.bot, ctx.author.id,
+            guild=ctx.guild, member=ctx.author,
+        )
+    except Exception:
+        pass
+
+Do not place this in account lookup or before the account link is actually saved.

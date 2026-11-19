@@ -1,0 +1,22 @@
+FILE: cogs/economy/games/_manager.py
+
+In ArcadeManager.record_stats(), after the existing `record_arcade_round(...)`
+call succeeds and immediately before `return True`, add:
+
+    try:
+        from cogs.achievements.arcade_bridge import record_arcade_result
+        await record_arcade_result(
+            self.bot,
+            user_id=game_view.user_id,
+            game=game_view.game,
+            wager=game_view.bet,
+            outcome=outcome,
+            payout=payout,
+            reference=game_view.reference,
+        )
+    except Exception:
+        pass
+
+Do not put this in each game branch. record_stats() is the shared settlement point.
+The all-in Risk Taker metric needs a later wager-placement hook because this helper
+does not currently receive the pre-wager wallet balance.

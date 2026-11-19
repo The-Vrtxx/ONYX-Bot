@@ -1,0 +1,10 @@
+FILE: profile card command / renderer caller.
+
+Before rendering a profile, retrieve the equipped achievement title:
+
+    from cogs.achievements.engine import get_equipped_title
+    achievement_title = await get_equipped_title(self.bot.db, member.id)
+
+Pass achievement_title into the renderer and display it as a subtitle/badge.
+The current profile_card_renderer.py implementation was not included in the inspected
+source, so this package does not replace it with a guessed version.

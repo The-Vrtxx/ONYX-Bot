@@ -1,0 +1,17 @@
+FILE: cogs/leveling/levels.py
+
+After the global level/Prestige database write succeeds, call:
+
+    from cogs.achievements.engine import record_level
+    await record_level(
+        self.bot,
+        user_id=member.id,
+        level=profile_row["level"],
+        prestige=profile_row["prestige"],
+        guild=member.guild,
+        member=member,
+    )
+
+Replace `profile_row` with the actual row variable used in that function. The source
+review confirms this cog uses global progression, but the exact persistence block
+must be matched to your current full file before inserting.

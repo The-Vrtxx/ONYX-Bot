@@ -1,0 +1,15 @@
+FILE: cogs/community/giveaways.py
+
+In finish_due(), inside `for winner_id in winners:`, after the INSERT into
+onyx_giveaway_winners, add:
+
+    try:
+        from cogs.achievements.engine import add_metric, evaluate
+        await add_metric(self.bot.db, winner_id, "giveaway_wins")
+        member = guild.get_member(winner_id) if guild else None
+        await evaluate(self.bot, winner_id, guild=guild, member=member)
+    except Exception:
+        pass
+
+For reroll(), apply the same after the winner INSERT using ctx.guild. Decide whether
+rerolls should count as a separate giveaway win before enabling that hook there.
