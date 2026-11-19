@@ -1,1 +1,0 @@
-"""ONYX standalone global achievement system."""
