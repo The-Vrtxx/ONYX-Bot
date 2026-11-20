@@ -26,6 +26,11 @@ from server_owner_api import register_server_owner_routes, ensure_server_owner_t
 from server_management_api import register_management_routes, ensure_management_tables
 from profile_card_api import register_profile_card_route
 
+from achievements_api import (
+    ensure_achievement_tables,
+    register_achievement_routes,
+)
+
 from currency_system import (
     ensure_currency_tables,
     get_credit_balance,
@@ -1225,6 +1230,7 @@ async def on_startup(app):
     await ensure_currency_tables(app["db"])
     await ensure_server_owner_tables(app["db"])
     await ensure_management_tables(app["db"])
+    await ensure_achievement_tables(app["db"])
 
 
 async def on_cleanup(app):
@@ -1280,6 +1286,7 @@ def create_app():
     app.router.add_get("/api/inventory", inventory)
 
     register_profile_card_route(app, require_user)
+    register_achievement_routes(app, require_user)
     register_command_routes(app)
 
     return app
