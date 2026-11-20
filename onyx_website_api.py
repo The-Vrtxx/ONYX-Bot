@@ -25,6 +25,7 @@ from watchdog_api import register_watchdog_routes
 from server_owner_api import register_server_owner_routes, ensure_server_owner_tables
 from server_management_api import register_management_routes, ensure_management_tables
 from profile_card_api import register_profile_card_route
+from profile_card_customization_api import register_profile_customization_routes
 
 from achievements_api import (
     ensure_achievement_tables,
@@ -1286,6 +1287,7 @@ def create_app():
     app.router.add_get("/api/inventory", inventory)
 
     register_profile_card_route(app, require_user)
+    register_profile_customization_routes(app)
     register_achievement_routes(app, require_user)
     register_command_routes(app)
 
