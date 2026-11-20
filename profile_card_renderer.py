@@ -123,7 +123,7 @@ def _get_cosmetic_asset(category, item_id):
     asset_id = f"{category}:{item_id}"
     now = time.time()
 
-    with _cosmetic_asset_cache_lock:
+    with _cosmetic_cache_lock:
         cached = _cosmetic_asset_cache.get(asset_id)
 
         if cached:
@@ -151,7 +151,7 @@ def _get_cosmetic_asset(category, item_id):
     except Exception:
         image = None
 
-    with _cosmetic_asset_cache_lock:
+    with _cosmetic_cache_lock:
         _cosmetic_asset_cache[asset_id] = (
             now,
             image.copy() if image else None,
