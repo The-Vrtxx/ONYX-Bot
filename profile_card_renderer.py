@@ -123,7 +123,7 @@ def _get_cosmetic_asset(category, item_id):
     asset_id = f"{category}:{item_id}"
     now = time.time()
 
-    with _cosmetic_cache_lock:
+    with _cosmetic_asset_cache_lock:
         cached = _cosmetic_asset_cache.get(asset_id)
 
         if cached:
@@ -151,7 +151,7 @@ def _get_cosmetic_asset(category, item_id):
     except Exception:
         image = None
 
-    with _cosmetic_cache_lock:
+    with _cosmetic_asset_cache_lock:
         _cosmetic_asset_cache[asset_id] = (
             now,
             image.copy() if image else None,
@@ -510,7 +510,7 @@ def render_onyx_profile_card(
     font_name = _card_font(43, True)
     font_stage = _card_font(25, True)
     font_label = _card_font(16, True)
-    font_cosmetic_title = _card_font(19, True)
+    font_cosmetic_title = _card_font(23, True)
 
     # Branding and member name.
     draw.text(
@@ -533,23 +533,36 @@ def render_onyx_profile_card(
         width=2,
     )
 
+    # Draw the cosmetic title immediately beside the username.
+    # Keep both on one line and render the equipped title in white quotation marks.
+    name_text = _fit_text(draw, display_name, font_name, 500)
     draw.text(
         (58, 125),
-        _fit_text(draw, display_name, font_name, 650),
+        name_text,
         font=font_name,
         fill=(245, 249, 252),
     )
 
-    # Cosmetic title is separate from the progression title.
     if cosmetic_title_id:
         cosmetic_title = str(cosmetic_title_id).replace("_", " ").replace("-", " ")
         cosmetic_title = cosmetic_title.title()
+        cosmetic_title = f'"{cosmetic_title}"'
+
+        name_bbox = draw.textbbox((58, 125), name_text, font=font_name)
+        title_x = name_bbox[2] + 18
+        remaining_width = max(80, 820 - title_x)
+        cosmetic_title = _fit_text(
+            draw,
+            cosmetic_title,
+            font_cosmetic_title,
+            remaining_width,
+        )
 
         draw.text(
-            (62, 174),
-            _fit_text(draw, cosmetic_title, font_cosmetic_title, 600),
+            (title_x, 137),
+            cosmetic_title,
             font=font_cosmetic_title,
-            fill=(185, 200, 215),
+            fill=(255, 255, 255),
         )
 
     # Determine progression stage and current prestige badge.
