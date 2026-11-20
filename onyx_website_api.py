@@ -191,6 +191,13 @@ def session_user(request):
 
     return int(payload["uid"])
 
+def get_profile_card_display_name(request):
+    """Return the Discord display name stored in the signed website session."""
+    session = read_signed(
+        request.cookies.get(COOKIE_NAME, "")
+    ) or {}
+
+    return str(session.get("username") or "Discord User")
 
 def require_user(request):
     user_id = session_user(request)
@@ -1286,7 +1293,7 @@ def create_app():
     app.router.add_post("/api/equip", equip_item)
     app.router.add_get("/api/inventory", inventory)
 
-    register_profile_card_route(app, require_user)
+    register_profile_card_route(app, require_user, get_profile_card_display_name)
     register_profile_customization_routes(app)
     register_achievement_routes(app, require_user)
     register_command_routes(app)
