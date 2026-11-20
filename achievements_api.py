@@ -1,39 +1,24 @@
 
-"""
-ONYX Achievement Website API
-Reads achievement progress for the currently authenticated Discord user.
-Never exposes another user's records or undiscovered secret definitions.
+"""Website API for ONYX achievements.
+
+The bot remains responsible for tracking progress, unlocking achievements,
+granting rewards, and sending private Discord unlock notifications.
+
+This module only reads achievement data and allows members to equip
+titles they have already earned.
 """
 
 from aiohttp import web
+import asyncpg
 
-from cogs.achievements.definitions import ACHIEVEMENTS, CATEGORIES
+from cogs.achievements.definitions import ACHIEVEMENTS
 from cogs.achievements.secret_definitions import SECRET_ACHIEVEMENTS
 
 
-def _iso(value):
-    if value is None:
-        return None
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return str(value)
-
-
-def _category_name(key):
-    names = {
-        "arcade": "Arcade",
-        "community": "Community",
-        "exploration": "Exploration",
-        "progression": "Progression",
-        "social": "Social",
-    }
-    return names.get(key, key.title())
-
-
 async def ensure_achievement_tables(pool):
-    """
-    Create only the achievement tables if they do not exist.
-    Existing rows and existing table definitions are preserved.
+    """Create achievement tables if they do not already exist.
+
+    Existing member progress and unlocks are preserved.
     """
 
     statements = [
@@ -42,7 +27,7 @@ async def ensure_achievement_tables(pool):
             user_id BIGINT NOT NULL,
             metric TEXT NOT NULL,
             value BIGINT NOT NULL DEFAULT 0,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, metric)
         )
         """,
@@ -50,7 +35,7 @@ async def ensure_achievement_tables(pool):
         CREATE TABLE IF NOT EXISTS onyx_achievement_unlocks (
             user_id BIGINT NOT NULL,
             achievement_id TEXT NOT NULL,
-            unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            unlocked_at TEXT DEFAULT CURRENT_TIMESTAMP,
             reward_paid BIGINT NOT NULL DEFAULT 0,
             source TEXT NOT NULL DEFAULT 'automatic',
             PRIMARY KEY (user_id, achievement_id)
@@ -61,7 +46,7 @@ async def ensure_achievement_tables(pool):
             user_id BIGINT NOT NULL,
             title TEXT NOT NULL,
             source_achievement TEXT NOT NULL,
-            unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            unlocked_at TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, title)
         )
         """,
@@ -75,18 +60,10 @@ async def ensure_achievement_tables(pool):
         CREATE TABLE IF NOT EXISTS onyx_achievement_secret_unlocks (
             user_id BIGINT NOT NULL,
             secret_id TEXT NOT NULL,
-            unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            unlocked_at TEXT DEFAULT CURRENT_TIMESTAMP,
             source TEXT NOT NULL DEFAULT 'discovery',
             PRIMARY KEY (user_id, secret_id)
         )
-        """,
-        """
-        CREATE INDEX IF NOT EXISTS idx_onyx_achievement_unlocks_user
-        ON onyx_achievement_unlocks(user_id)
-        """,
-        """
-        CREATE INDEX IF NOT EXISTS idx_onyx_achievement_secrets_user
-        ON onyx_achievement_secret_unlocks(user_id)
         """,
     ]
 
@@ -95,16 +72,27 @@ async def ensure_achievement_tables(pool):
             await conn.execute(statement)
 
 
-async def get_achievement_data(request):
-    user_id = request.app["achievement_require_user"](request)
-    pool = request.app["db"]
+def category_name(category):
+    names = {
+        "arcade": "Arcade",
+        "community": "Community",
+        "exploration": "Exploration",
+        "progression": "Progression",
+        "social": "Social & Fun",
+    }
+    return names.get(category, category.replace("_", " ").title())
+
+
+async def get_achievement_data(pool, user_id):
+    """Build the authenticated member's achievement dashboard data."""
 
     async with pool.acquire() as conn:
+
         metric_rows = await conn.fetch(
             """
             SELECT metric, value
             FROM onyx_achievement_metrics
-            WHERE user_id=$1
+            WHERE user_id = $1
             """,
             user_id,
         )
@@ -113,7 +101,7 @@ async def get_achievement_data(request):
             """
             SELECT achievement_id, unlocked_at, reward_paid, source
             FROM onyx_achievement_unlocks
-            WHERE user_id=$1
+            WHERE user_id = $1
             ORDER BY unlocked_at DESC
             """,
             user_id,
@@ -123,18 +111,8 @@ async def get_achievement_data(request):
             """
             SELECT title, source_achievement, unlocked_at
             FROM onyx_achievement_titles
-            WHERE user_id=$1
+            WHERE user_id = $1
             ORDER BY unlocked_at ASC
-            """,
-            user_id,
-        )
-
-        secret_rows = await conn.fetch(
-            """
-            SELECT secret_id, unlocked_at, source
-            FROM onyx_achievement_secret_unlocks
-            WHERE user_id=$1
-            ORDER BY unlocked_at DESC
             """,
             user_id,
         )
@@ -143,13 +121,23 @@ async def get_achievement_data(request):
             """
             SELECT title
             FROM onyx_achievement_equipped
-            WHERE user_id=$1
+            WHERE user_id = $1
+            """,
+            user_id,
+        )
+
+        secret_rows = await conn.fetch(
+            """
+            SELECT secret_id, unlocked_at, source
+            FROM onyx_achievement_secret_unlocks
+            WHERE user_id = $1
+            ORDER BY unlocked_at DESC
             """,
             user_id,
         )
 
     metrics = {
-        row["metric"]: int(row["value"] or 0)
+        row["metric"]: int(row["value"])
         for row in metric_rows
     }
 
@@ -162,173 +150,253 @@ async def get_achievement_data(request):
 
     for achievement_id, definition in ACHIEVEMENTS.items():
         metric = definition.get("metric", "")
-        target = max(1, int(definition.get("target", 1) or 1))
-        progress = max(0, int(metrics.get(metric, 0)))
-        unlocked_row = unlocks.get(achievement_id)
+        target = int(definition.get("target", 0) or 0)
+        progress = int(metrics.get(metric, 0))
 
         extra_metric = definition.get("extra_metric")
-        extra_target = int(definition.get("extra_target", 0) or 0)
+        extra_target = int(
+            definition.get("extra_target", 0) or 0
+        )
 
-        if extra_metric and extra_target:
+        extra_progress = None
+        extra_complete = True
+
+        if extra_metric:
             extra_progress = int(metrics.get(extra_metric, 0))
-            meets_extra = extra_progress >= extra_target
-        else:
-            extra_progress = None
-            meets_extra = True
+            extra_complete = extra_progress >= extra_target
+
+        unlocked_row = unlocks.get(achievement_id)
+        unlocked = unlocked_row is not None
 
         achievements.append({
             "id": achievement_id,
             "name": definition.get("name", achievement_id),
             "description": definition.get("description", ""),
-            "icon": definition.get("icon", "🏆"),
-            "tier": definition.get("tier", "Bronze"),
-            "category": _category_name(
+            "category": definition.get("category", "other"),
+            "category_name": category_name(
                 definition.get("category", "other")
             ),
-            "progress": min(progress, target),
+            "tier": definition.get("tier", "Bronze"),
+            "icon": definition.get("icon", "🏆"),
+            "metric": metric,
+            "progress": min(progress, target) if target else progress,
+            "current": progress,
             "target": target,
-            "unlocked": unlocked_row is not None,
+            "percentage": (
+                min(100, round((progress / target) * 100))
+                if target > 0 else 0
+            ),
+            "extra_metric": extra_metric,
+            "extra_current": extra_progress,
+            "extra_target": extra_target if extra_metric else None,
+            "extra_complete": extra_complete,
+            "unlocked": unlocked,
             "unlocked_at": (
-                _iso(unlocked_row["unlocked_at"])
+                unlocked_row["unlocked_at"]
                 if unlocked_row else None
             ),
             "reward": int(definition.get("reward", 0) or 0),
             "reward_paid": (
-                int(unlocked_row["reward_paid"] or 0)
+                int(unlocked_row["reward_paid"])
                 if unlocked_row else 0
             ),
-            "extra_progress": extra_progress,
-            "extra_target": extra_target if extra_metric else None,
-            "extra_complete": meets_extra,
+            "source": (
+                unlocked_row["source"]
+                if unlocked_row else None
+            ),
+            "title_reward": definition.get("title"),
         })
 
-    # IMPORTANT:
-    # Only return secrets that this authenticated user has unlocked.
-    # Never return the complete secret definition catalog.
-    secrets = []
+    unlocked_secrets = []
 
+    # Only return secret definitions for secrets this member has unlocked.
+    # Never send locked secret names, descriptions, hints, or IDs to the site.
     for row in secret_rows:
-        definition = SECRET_ACHIEVEMENTS.get(row["secret_id"])
+        secret_id = row["secret_id"]
+        definition = SECRET_ACHIEVEMENTS.get(secret_id)
 
         if not definition:
             continue
 
-        secrets.append({
-            "name": definition.get("name", "Secret Discovered"),
+        unlocked_secrets.append({
+            "id": secret_id,
+            "name": definition.get("name", secret_id),
             "description": definition.get("description", ""),
-            "icon": definition.get("icon", "🔐"),
-            "unlocked_at": _iso(row["unlocked_at"]),
+            "icon": definition.get("icon", "🕵️"),
+            "title_reward": definition.get("title"),
+            "unlocked_at": row["unlocked_at"],
+            "source": row["source"],
         })
 
     titles = [
         {
             "title": row["title"],
-            "source": row["source_achievement"],
-            "unlocked_at": _iso(row["unlocked_at"]),
+            "source_achievement": row["source_achievement"],
+            "unlocked_at": row["unlocked_at"],
         }
         for row in title_rows
     ]
 
-    return web.json_response({
-        "achievements": achievements,
-        "secrets": secrets,
-        "challenges": [],
-        "titles": titles,
-        "equipped_title": (
-            equipped_row["title"] if equipped_row else None
-        ),
+    unlocked_count = len(unlocks)
+    total_count = len(ACHIEVEMENTS)
+
+    return {
+        "success": True,
+        "user_id": str(user_id),
+
         "summary": {
-            "total_achievements": len(achievements),
-            "unlocked_achievements": len(unlocks),
-            "secrets_discovered": len(secrets),
+            "unlocked": unlocked_count,
+            "total": total_count,
+            "locked": max(0, total_count - unlocked_count),
+            "percentage": (
+                round((unlocked_count / total_count) * 100)
+                if total_count else 0
+            ),
+            "secret_unlocked": len(unlocked_secrets),
+            "secret_total": len(SECRET_ACHIEVEMENTS),
             "titles_earned": len(titles),
         },
-    })
+
+        "achievements": achievements,
+        "secrets": unlocked_secrets,
+        "titles": titles,
+
+        "equipped_title": (
+            equipped_row["title"]
+            if equipped_row else None
+        ),
+
+        "metrics": metrics,
+
+        # Daily challenges will be connected separately when their
+        # tracking and storage system is implemented.
+        "challenges": [],
+    }
 
 
-async def equip_achievement_title(request):
-    user_id = request.app["achievement_require_user"](request)
+async def achievements_me(request):
+    """GET /api/achievements/me"""
 
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response(
-            {"error": "Invalid JSON body."},
-            status=400,
-        )
+    user_id = request.get("achievement_require_user")
 
-    title = body.get("title")
-
-    if not isinstance(title, str) or not title.strip():
-        return web.json_response(
-            {"error": "A valid title is required."},
-            status=400,
-        )
-
-    title = title.strip()
-
-    if len(title) > 80:
-        return web.json_response(
-            {"error": "Title is too long."},
-            status=400,
+    if user_id is None:
+        raise web.HTTPUnauthorized(
+            text="You must sign in with Discord."
         )
 
     pool = request.app["db"]
 
+    data = await get_achievement_data(pool, int(user_id))
+
+    return web.json_response(data)
+
+
+async def equip_achievement_title(request):
+    """POST /api/achievements/equip-title"""
+
+    user_id = request.get("achievement_require_user")
+
+    if user_id is None:
+        raise web.HTTPUnauthorized(
+            text="You must sign in with Discord."
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(
+            text="Invalid JSON request."
+        )
+
+    title = body.get("title")
+
+    if title is not None:
+        if not isinstance(title, str):
+            raise web.HTTPBadRequest(
+                text="Title must be text or null."
+            )
+
+        title = title.strip()
+
+        if not title:
+            title = None
+
+        if title and len(title) > 64:
+            raise web.HTTPBadRequest(
+                text="Title is too long."
+            )
+
+    pool = request.app["db"]
+
     async with pool.acquire() as conn:
-        # A user can equip only a title already earned by that user.
+
+        if title is None:
+            await conn.execute(
+                """
+                DELETE FROM onyx_achievement_equipped
+                WHERE user_id = $1
+                """,
+                int(user_id),
+            )
+
+            return web.json_response({
+                "success": True,
+                "equipped_title": None,
+                "message": "Title unequipped.",
+            })
+
+        # A member can only equip a title they have already earned.
         earned = await conn.fetchrow(
             """
             SELECT title
             FROM onyx_achievement_titles
-            WHERE user_id=$1 AND title=$2
+            WHERE user_id = $1
+              AND title = $2
             """,
-            user_id,
+            int(user_id),
             title,
         )
 
         if not earned:
-            return web.json_response(
-                {"error": "You have not unlocked that title."},
-                status=403,
+            raise web.HTTPForbidden(
+                text="You have not unlocked that title."
             )
 
         await conn.execute(
             """
-            INSERT INTO onyx_achievement_equipped(user_id, title)
-            VALUES($1, $2)
-            ON CONFLICT(user_id)
-            DO UPDATE SET title=EXCLUDED.title
+            INSERT INTO onyx_achievement_equipped (user_id, title)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET title = EXCLUDED.title
             """,
-            user_id,
+            int(user_id),
             title,
         )
 
     return web.json_response({
-        "ok": True,
+        "success": True,
         "equipped_title": title,
+        "message": "Title equipped successfully.",
     })
 
 
 def register_achievement_routes(app, require_user):
-    """
-    Register routes and startup table initialization.
-    Uses the API's existing signed Discord session validator.
-    """
+    """Register achievement routes with the main website API."""
 
-    app["achievement_require_user"] = require_user
+    async def authenticated_achievements_me(request):
+        request["achievement_require_user"] = require_user(request)
+        return await achievements_me(request)
 
-    async def startup_tables(application):
-        await ensure_achievement_tables(application["db"])
-
-    app.on_startup.append(startup_tables)
+    async def authenticated_equip_title(request):
+        request["achievement_require_user"] = require_user(request)
+        return await equip_achievement_title(request)
 
     app.router.add_get(
         "/api/achievements/me",
-        get_achievement_data,
+        authenticated_achievements_me,
     )
 
     app.router.add_post(
         "/api/achievements/equip-title",
-        equip_achievement_title,
+        authenticated_equip_title,
     )
