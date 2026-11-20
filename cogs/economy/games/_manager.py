@@ -2,10 +2,11 @@
 """ONYX arcade manager.
 
 Connects game results, Credits payouts, persistent statistics,
-and cross-game streaks.
+background achievements, and cross-game streaks.
 """
 
 import uuid
+import logging
 
 from cogs.economy._common import make_embed, money, pay_out
 from cogs.economy.games._blackjack import BlackjackView
@@ -26,6 +27,9 @@ from cogs.economy.games._streaks import (
 )
 from cogs.economy.games._stats import record_arcade_round
 from cogs.economy.games._controls import game_is_enabled
+
+
+log = logging.getLogger(__name__)
 
 
 GAME_NAMES = {
@@ -54,10 +58,10 @@ class ArcadeManager:
         self.bot = bot
 
     async def record_stats(self, game_view, outcome, payout=0):
-        """Record a settled game without allowing stats errors to affect payouts."""
+        """Record a settled game and update background achievements."""
 
         try:
-            await record_arcade_round(
+            recorded = await record_arcade_round(
                 self.bot.db.pool,
                 reference=game_view.reference,
                 user_id=game_view.user_id,
@@ -67,7 +71,33 @@ class ArcadeManager:
                 payout=payout,
             )
         except Exception:
+            log.exception("Could not record ONYX arcade round.")
             return False
+
+        # Do not count duplicate callbacks as additional arcade activity.
+        if not recorded:
+            return True
+
+        # Achievement failures must never interfere with game settlement.
+        try:
+            from cogs.achievements.arcade_bridge import (
+                record_arcade_result,
+            )
+
+            await record_arcade_result(
+                self.bot,
+                user_id=game_view.user_id,
+                game=game_view.game,
+                wager=game_view.bet,
+                outcome=outcome,
+                payout=payout,
+                reference=game_view.reference,
+            )
+
+        except Exception:
+            log.exception(
+                "Could not update ONYX arcade achievement progress."
+            )
 
         return True
 
