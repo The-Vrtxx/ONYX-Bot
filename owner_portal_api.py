@@ -14,6 +14,7 @@ from aiohttp import web
 
 from owner_leveling_api import register_leveling_routes
 from system_settings_api import register_system_settings_routes
+from owner_titles_api import register_owner_title_routes
 
 
 ASSET_CATEGORIES = {
@@ -1095,3 +1096,6 @@ def register_owner_routes(app, require_user, bot_owner_id):
 
     register_leveling_routes(app, require_user, bot_owner_id)
     register_system_settings_routes(app, require_user, bot_owner_id)
+
+    # Owner title catalog importer
+    register_owner_title_routes(app, require_owner)
