@@ -6,6 +6,7 @@ onyx_website_api.py using register_profile_customization_routes(app).
 """
 
 import asyncio
+import json
 import re
 
 from aiohttp import web
@@ -237,12 +238,22 @@ async def customization_inventory(request):
     async with pool.acquire() as conn:
         progress = await _get_progress(conn, user_id)
 
+        # Include the catalog artwork information for each owned cosmetic.
         owned_rows = await conn.fetch(
             """
-            SELECT category, item_id
-            FROM onyx_prestige_owned
-            WHERE user_id=$1
-            ORDER BY category, item_id
+            SELECT
+                o.category,
+                o.item_id,
+                COALESCE(a.display_name, o.item_id) AS display_name,
+                COALESCE(a.description, '') AS description,
+                a.image_url,
+                a.metadata_json
+            FROM onyx_prestige_owned o
+            LEFT JOIN onyx_asset_catalog a
+              ON lower(a.category)=lower(o.category)
+             AND a.item_id=o.item_id
+            WHERE o.user_id=$1
+            ORDER BY o.category, o.item_id
             """,
             user_id,
         )
@@ -275,26 +286,37 @@ async def customization_inventory(request):
     for row in owned_rows:
         category = str(row["category"]).lower()
         item_id = str(row["item_id"])
+        metadata = row["metadata_json"] or {}
+
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (TypeError, ValueError):
+                metadata = {}
+
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        item = {
+            "id": item_id,
+            "name": str(row["display_name"] or item_id),
+            "description": str(row["description"] or ""),
+            "image_url": row["image_url"],
+            "metadata": metadata,
+            "source": "shop",
+        }
 
         if category == "border":
-            items.append({
-                "category": "frame",
-                "frame_category": "border",
-                "id": item_id,
-                "name": item_id.replace("_", " ").replace("-", " ").title(),
-                "source": "shop",
-            })
+            item["category"] = "frame"
+            item["frame_category"] = "border"
+            items.append(item)
             continue
 
         if category not in SLOTS:
             continue
 
-        items.append({
-            "category": category,
-            "id": item_id,
-            "name": item_id.replace("_", " ").replace("-", " ").title(),
-            "source": "shop",
-        })
+        item["category"] = category
+        items.append(item)
 
     for row in achievement_rows:
         title = str(row["title"])
