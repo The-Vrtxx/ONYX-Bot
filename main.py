@@ -30,7 +30,7 @@ COG_ROOT = BOT_ROOT / "cogs"
 
 
 def discover_cog_extensions():
-    """Return every cog extension inside cogs/, including category folders."""
+    """Discover only Python files that define Discord cog setup functions."""
     extensions = []
 
     if not COG_ROOT.is_dir():
@@ -39,6 +39,20 @@ def discover_cog_extensions():
 
     for path in COG_ROOT.rglob("*.py"):
         if path.name.startswith("_") or path.name == "aliases.py":
+            continue
+
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            log.exception("Could not read cog file: %s", path)
+            continue
+
+        # Helper modules, definitions, and category data are not extensions.
+        # Only load files that expose a Discord extension setup function.
+        if (
+            "async def setup(" not in source
+            and "def setup(" not in source
+        ):
             continue
 
         relative_path = path.relative_to(BOT_ROOT).with_suffix("")
@@ -112,7 +126,7 @@ class CommunityBot(commands.Bot):
                 "Check Render logs and DATABASE_URL."
             ) from exc
 
-        # Discover every cog before attempting to load extensions.
+        # Discover every valid cog before attempting to load extensions.
         extensions = discover_cog_extensions()
 
         self.discovered_cogs = sorted(
@@ -188,14 +202,12 @@ def build_alias_lookup(bot):
     lookup = {}
     skipped = []
 
-    # Includes registered top-level command names and their built-in aliases.
     registered_names = {
         name.casefold()
         for name in bot.all_commands
     }
 
     for command_path, aliases in COMMAND_ALIASES.items():
-        # Confirm the destination command or subcommand exists.
         command = bot.get_command(command_path)
 
         if command is None:
@@ -211,14 +223,12 @@ def build_alias_lookup(bot):
                 skipped.append(f"{alias} (invalid shortcut)")
                 continue
 
-            # Never let a shortcut replace a real command or built-in alias.
             if key in registered_names:
                 skipped.append(
                     f"{key} (conflicts with registered command)"
                 )
                 continue
 
-            # Never allow two shortcuts to point to different commands.
             if key in lookup:
                 skipped.append(
                     f"{key} (duplicate shortcut)"
@@ -358,9 +368,6 @@ async def get_global_maintenance_settings():
 
     except Exception:
         log.exception("Could not load global maintenance settings.")
-
-        # Fail open if settings cannot be read, so a database issue
-        # does not accidentally lock everyone out of the bot.
         return False, None
 
 
@@ -369,7 +376,6 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # The bot owner can always use commands, including during maintenance.
     try:
         is_owner = await bot.is_owner(message.author)
 
@@ -377,7 +383,6 @@ async def on_message(message):
         log.exception("Could not verify bot owner.")
         is_owner = message.author.id == bot.owner_id
 
-    # Identify commands using the configured prefix or bot mention.
     prefixes = await _prefixes(bot, message)
 
     is_command = any(
@@ -386,7 +391,6 @@ async def on_message(message):
         if prefix
     )
 
-    # Maintenance blocks commands from everyone except the bot owner.
     if is_command and not is_owner:
         maintenance_enabled, maintenance_message = (
             await get_global_maintenance_settings()
